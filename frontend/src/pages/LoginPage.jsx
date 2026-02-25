@@ -16,7 +16,7 @@ export default function LoginPage() {
     return "/";
   }, [location.state]);
 
-  const [form, setForm] = useState({ username: "admin", password: "admin123" });
+  const [form, setForm] = useState({ username: "", password: "" });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -39,7 +39,7 @@ export default function LoginPage() {
       setToken(data.access_token);
       navigate(redirectTarget, { replace: true });
     } catch (apiError) {
-      setError(apiError.message || "Unable to login. Check credentials and retry.");
+      setError(apiError.message || "Не удалось выполнить вход. Проверьте логин и пароль.");
     } finally {
       setIsSubmitting(false);
     }
@@ -48,16 +48,17 @@ export default function LoginPage() {
   return (
     <main className="page page-login">
       <section className="auth-shell fade-up">
-        <p className="kicker">Car Research Admin</p>
-        <h1>Welcome back</h1>
-        <p className="auth-subtitle">Sign in to access live car inventory from the protected API.</p>
+        <p className="kicker">Car Research Админ-панель</p>
+        <h1>С возвращением</h1>
+        <p className="auth-subtitle">Войдите в систему, чтобы открыть защищенный список автомобилей.</p>
 
         <form className="auth-form" onSubmit={onSubmit}>
           <label>
-            Username
+            Логин
             <input
               autoComplete="username"
               name="username"
+              placeholder="Введите логин"
               onChange={onChange}
               value={form.username}
               required
@@ -65,11 +66,12 @@ export default function LoginPage() {
           </label>
 
           <label>
-            Password
+            Пароль
             <input
               autoComplete="current-password"
               type="password"
               name="password"
+              placeholder="Введите пароль"
               onChange={onChange}
               value={form.password}
               required
@@ -79,7 +81,7 @@ export default function LoginPage() {
           {error ? <p className="form-error">{error}</p> : null}
 
           <button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? "Signing in..." : "Sign in"}
+            {isSubmitting ? "Входим..." : "Войти"}
           </button>
         </form>
       </section>

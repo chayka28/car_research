@@ -1,28 +1,36 @@
-# Frontend (Admin SPA)
+# Frontend (админ SPA)
 
-React + Vite admin UI for authentication and car inventory review.
+React + Vite интерфейс для входа и просмотра списка автомобилей из защищенного API.
 
-## Features
-- `/login` sign-in form, stores JWT in `localStorage`
-- `/` protected route with cars table from backend API
-- refresh, search, logout, and responsive layout
+## Что реализовано
+- `/login` — форма входа, JWT сохраняется в `localStorage`
+- `/` — защищенный роут с таблицей автомобилей
+- поиск, обновление данных, logout, адаптивный интерфейс
 
-## Run locally
+## Запуск через Docker Compose
+Из корня репозитория:
+
+```powershell
+docker compose up -d --build db backend frontend
+```
+
+Открыть `http://localhost:8080`.
+
+## Локальный запуск frontend
 ```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+Открыть `http://localhost:5173`.
 
-## Backend dependency
-Backend should be running on `http://localhost:8000`.
-The Vite dev server proxies `/api` and `/health` requests to backend.
+## Зависимость от backend
+Backend должен быть доступен на `http://localhost:8000`.
+В dev-режиме Vite проксирует `/api` и `/health` на backend.
 
-## Optional env override
-You can define `VITE_API_BASE_URL` in `.env` if needed.
-Example:
+## Опциональная переменная
+Можно задать `VITE_API_BASE_URL` в `.env` при необходимости:
 
 ```env
 VITE_API_BASE_URL=http://localhost:8000

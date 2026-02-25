@@ -9,9 +9,9 @@ function formatPrice(value) {
     return "-";
   }
 
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat("ru-RU", {
     style: "currency",
-    currency: "USD",
+    currency: "RUB",
     maximumFractionDigits: 0
   }).format(value);
 }
@@ -42,7 +42,7 @@ export default function CarsPage() {
         navigate("/login", { replace: true });
         return;
       }
-      setError(apiError.message || "Unable to load cars.");
+      setError(apiError.message || "Не удалось загрузить автомобили.");
     } finally {
       setIsLoading(false);
     }
@@ -77,32 +77,32 @@ export default function CarsPage() {
       <div className="dashboard fade-up">
         <header className="hero">
           <div>
-            <p className="kicker">Protected Area</p>
-            <h1>Car Inventory Console</h1>
-            <p className="hero-subtitle">Review real API data, verify auth, and inspect seeded records instantly.</p>
+            <p className="kicker">Защищенная зона</p>
+            <h1>Каталог автомобилей</h1>
+            <p className="hero-subtitle">Проверяйте актуальные данные API, авторизацию и тестовые записи в одном интерфейсе.</p>
           </div>
 
           <div className="hero-actions">
             <button className="secondary" onClick={loadCars} disabled={isLoading}>
-              {isLoading ? "Refreshing..." : "Refresh"}
+              {isLoading ? "Обновляем..." : "Обновить"}
             </button>
             <button className="danger" onClick={onLogout}>
-              Logout
+              Выйти
             </button>
           </div>
         </header>
 
         <section className="stats-grid">
           <article>
-            <span>Total Cars</span>
+            <span>Всего автомобилей</span>
             <strong>{cars.length}</strong>
           </article>
           <article>
-            <span>Visible Now</span>
+            <span>Отображается</span>
             <strong>{filteredCars.length}</strong>
           </article>
           <article>
-            <span>Most Common Brand</span>
+            <span>Популярная марка</span>
             <strong>
               {cars.length
                 ? Object.entries(
@@ -118,10 +118,10 @@ export default function CarsPage() {
 
         <section className="table-shell">
           <div className="table-toolbar">
-            <label htmlFor="search">Search</label>
+            <label htmlFor="search">Поиск</label>
             <input
               id="search"
-              placeholder="Brand, model, color, year"
+              placeholder="Марка, модель, цвет, год"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -129,20 +129,20 @@ export default function CarsPage() {
 
           {error ? <p className="form-error">{error}</p> : null}
 
-          {isLoading ? <p className="empty-state">Loading cars...</p> : null}
-          {!isLoading && filteredCars.length === 0 ? <p className="empty-state">No cars found.</p> : null}
+          {isLoading ? <p className="empty-state">Загрузка автомобилей...</p> : null}
+          {!isLoading && filteredCars.length === 0 ? <p className="empty-state">По вашему запросу ничего не найдено.</p> : null}
 
           {!isLoading && filteredCars.length > 0 ? (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Brand</th>
-                    <th>Model</th>
-                    <th>Year</th>
-                    <th>Price</th>
-                    <th>Color</th>
-                    <th>Source</th>
+                    <th>Марка</th>
+                    <th>Модель</th>
+                    <th>Год</th>
+                    <th>Цена</th>
+                    <th>Цвет</th>
+                    <th>Источник</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -155,7 +155,7 @@ export default function CarsPage() {
                       <td>{car.color}</td>
                       <td>
                         <a href={car.link} target="_blank" rel="noreferrer">
-                          Open
+                          Открыть
                         </a>
                       </td>
                     </tr>

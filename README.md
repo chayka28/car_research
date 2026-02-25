@@ -84,7 +84,15 @@ Expected:
 
 ## Admin frontend
 
-Run backend first (`docker compose up -d --build db backend`), then start the SPA:
+Запуск через Docker Compose (backend + frontend):
+
+```powershell
+docker compose up -d --build db backend frontend
+```
+
+Открыть: `http://localhost:8080`.
+
+Локальный режим разработки frontend:
 
 ```powershell
 cd frontend
@@ -92,8 +100,8 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+Открыть: `http://localhost:5173`.
 
-Auth flow:
+Поток авторизации:
 - `/login` -> `POST /api/login`
-- `/` (protected) -> `GET /api/cars` with JWT bearer token
+- `/` (защищенный) -> `GET /api/cars` с JWT в `Authorization: Bearer ...`
