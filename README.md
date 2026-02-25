@@ -81,3 +81,19 @@ Expected:
 - Empty cars response:
   - check DB/backend logs
   - ensure initial seeding ran during backend startup
+
+## Admin frontend
+
+Run backend first (`docker compose up -d --build db backend`), then start the SPA:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+Auth flow:
+- `/login` -> `POST /api/login`
+- `/` (protected) -> `GET /api/cars` with JWT bearer token
