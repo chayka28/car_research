@@ -30,5 +30,14 @@ services:
     depends_on:
       - backend
 
+  worker:
+    build:
+      context: ./worker
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - backend
+
 volumes:
   pg_data:

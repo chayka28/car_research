@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import ADMIN_PASSWORD, ADMIN_USERNAME
 from app.core.security import hash_password
-from app.db.base import Base
 from app.db.session import engine
 from app.models.car import Car
 from app.models.user import User
@@ -40,6 +39,5 @@ def seed_data(db: Session) -> None:
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
         seed_data(db)

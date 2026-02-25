@@ -105,3 +105,33 @@ npm run dev
 Поток авторизации:
 - `/login` -> `POST /api/login`
 - `/` (защищенный) -> `GET /api/cars` с JWT в `Authorization: Bearer ...`
+
+## Day 2 additions: Alembic + Worker
+
+### Alembic migrations
+Backend now runs migrations automatically on startup.
+
+Manual commands (inside `backend/`):
+
+```powershell
+alembic upgrade head
+```
+
+Migration files:
+- `backend/alembic/`
+- `backend/alembic/versions/20260225_0001_create_users_and_cars.py`
+
+### Worker (carsensor ingestion)
+Worker is now part of docker compose and runs periodically.
+
+Run full stack:
+
+```powershell
+docker compose up -d --build db backend frontend worker
+```
+
+Worker behavior:
+- fetches from `CARSENSOR_API_URL`
+- retries network failures with exponential backoff
+- normalizes required fields
+- performs PostgreSQL upsert by unique `link`

@@ -1,0 +1,20 @@
+import os
+
+
+POSTGRES_USER = os.getenv("POSTGRES_USER", "car_user")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "car_pass")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "car_research")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "db")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
+
+DATABASE_URL = (
+    f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)
+
+CARSENSOR_API_URL = os.getenv("CARSENSOR_API_URL", "https://carsensor.net/api")
+SCRAPER_INTERVAL_SECONDS = int(os.getenv("SCRAPER_INTERVAL_SECONDS", "900"))
+
+WORKER_REQUEST_TIMEOUT_SECONDS = int(os.getenv("WORKER_REQUEST_TIMEOUT_SECONDS", "20"))
+WORKER_MAX_RETRIES = int(os.getenv("WORKER_MAX_RETRIES", "3"))
+WORKER_BACKOFF_SECONDS = float(os.getenv("WORKER_BACKOFF_SECONDS", "1.5"))
+WORKER_RUN_ONCE = os.getenv("WORKER_RUN_ONCE", "0") == "1"
