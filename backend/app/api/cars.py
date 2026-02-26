@@ -13,13 +13,29 @@ from app.schemas.car import CarOut
 from app.schemas.listing import ListingOut, ListingPageOut
 
 router = APIRouter(prefix="/api", tags=["cars"])
+SENTINEL_PRICE_MAX = 2_147_483_647
+PRICE_NOT_SPECIFIED_TEXT = "price not specified"
 
 
-def _listing_price(item: Listing) -> int:
-    return item.total_price_rub or item.price_rub or item.total_price_jpy or item.price_jpy or 0
+def _normalize_price(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value <= 0 or value >= SENTINEL_PRICE_MAX:
+        return None
+    return value
+
+
+def _listing_price(item: Listing) -> int | None:
+    return (
+        _normalize_price(item.total_price_rub)
+        or _normalize_price(item.price_rub)
+        or _normalize_price(item.total_price_jpy)
+        or _normalize_price(item.price_jpy)
+    )
 
 
 def _to_listing_out(item: Listing) -> ListingOut:
+    listing_price = _listing_price(item)
     return ListingOut(
         id=item.id,
         external_id=item.external_id,
@@ -27,7 +43,8 @@ def _to_listing_out(item: Listing) -> ListingOut:
         brand=item.maker,
         model=item.model,
         year=item.year,
-        price=_listing_price(item),
+        price=listing_price,
+        price_text=PRICE_NOT_SPECIFIED_TEXT if listing_price is None else None,
         price_jpy=item.price_jpy,
         price_rub=item.price_rub,
         color=item.color,
@@ -39,6 +56,13 @@ def _to_listing_out(item: Listing) -> ListingOut:
 
 @router.get("/cars", response_model=List[CarOut])
 def list_cars(_: str = Depends(get_current_username), db: Session = Depends(get_db)) -> List[CarOut]:
+    price_expr = func.coalesce(
+        func.nullif(func.nullif(Listing.total_price_rub, SENTINEL_PRICE_MAX), 0),
+        func.nullif(func.nullif(Listing.price_rub, SENTINEL_PRICE_MAX), 0),
+        func.nullif(func.nullif(Listing.total_price_jpy, SENTINEL_PRICE_MAX), 0),
+        func.nullif(func.nullif(Listing.price_jpy, SENTINEL_PRICE_MAX), 0),
+    )
+
     listings = db.scalars(
         select(Listing)
         .where(Listing.source == "carsensor")
@@ -47,14 +71,8 @@ def list_cars(_: str = Depends(get_current_username), db: Session = Depends(get_
         .where(Listing.maker != "Unknown")
         .where(Listing.model != "Unknown")
         .where(Listing.year.is_not(None))
-        .where(
-            or_(
-                Listing.price_rub.is_not(None),
-                Listing.total_price_rub.is_not(None),
-                Listing.price_jpy.is_not(None),
-                Listing.total_price_jpy.is_not(None),
-            )
-        )
+        .where(price_expr.is_not(None))
+        .where(price_expr > 0)
         .order_by(Listing.last_seen_at.desc(), Listing.id.desc())
     ).all()
     if listings:
@@ -63,7 +81,7 @@ def list_cars(_: str = Depends(get_current_username), db: Session = Depends(get_
                 brand=item.maker,
                 model=item.model,
                 year=item.year or 0,
-                price=_listing_price(item),
+                price=_listing_price(item) or 0,
                 color=item.color or "Unknown",
                 link=item.url,
             )
@@ -97,11 +115,10 @@ def list_listings(
     include_unknown: bool = Query(False),
 ) -> ListingPageOut:
     price_expr = func.coalesce(
-        Listing.total_price_rub,
-        Listing.price_rub,
-        Listing.total_price_jpy,
-        Listing.price_jpy,
-        0,
+        func.nullif(func.nullif(Listing.total_price_rub, SENTINEL_PRICE_MAX), 0),
+        func.nullif(func.nullif(Listing.price_rub, SENTINEL_PRICE_MAX), 0),
+        func.nullif(func.nullif(Listing.total_price_jpy, SENTINEL_PRICE_MAX), 0),
+        func.nullif(func.nullif(Listing.price_jpy, SENTINEL_PRICE_MAX), 0),
     )
 
     stmt = select(Listing).where(Listing.source == "carsensor")
@@ -132,7 +149,10 @@ def list_listings(
         "status": Listing.is_active,
     }[sort_by]
 
-    order_clause = asc(sort_column) if sort_order == "asc" else desc(sort_column)
+    if sort_order == "asc":
+        order_clause = asc(sort_column).nullslast()
+    else:
+        order_clause = desc(sort_column).nullslast()
     stmt = stmt.order_by(order_clause, desc(Listing.id))
 
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0

@@ -9,6 +9,7 @@ KAKASI = kakasi()
 CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]")
 WHITESPACE_RE = re.compile(r"\s+")
 NON_WORD_RE = re.compile(r"[^A-Za-z0-9\s\-/+]")
+ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 MAKE_MAP = {
     "\u30c8\u30e8\u30bf": "Toyota",
@@ -66,11 +67,53 @@ COLOR_MAP = {
     "\u30d1\u30fc\u30eb\u30db\u30ef\u30a4\u30c8": "Pearl White",
     "\u30db\u30ef\u30a4\u30c8\u30d1\u30fc\u30eb": "Pearl White",
     "\u30d6\u30eb\u30c3\u30af\u30ea\u30f3\u30b0\u30ec\u30fc\u30e1\u30bf\u30ea\u30c3\u30af": "Brooklyn Gray Metallic",
+    "\u30db\u30ef\u30a4\u30c8\u30ce\u30fc\u30f4\u30a1\u30ac\u30e9\u30b9\u30d5\u30ec\u30fc\u30af": "White Nova Glass Flake",
+    "\u30db\u30ef\u30a4\u30c8\u30ce\u30f4\u30a1\u30ac\u30e9\u30b9\u30d5\u30ec\u30fc\u30af": "White Nova Glass Flake",
     "\u30b0\u30ec\u30fc\u30e1\u30bf\u30ea\u30c3\u30af": "Gray Metallic",
     "\u30b7\u30eb\u30d0\u30fc\u30e1\u30bf\u30ea\u30c3\u30af": "Silver Metallic",
     "\u30ec\u30c3\u30c9\u30e1\u30bf\u30ea\u30c3\u30af": "Red Metallic",
     "\u30d6\u30eb\u30fc\u30e1\u30bf\u30ea\u30c3\u30af": "Blue Metallic",
     "\u30d6\u30e9\u30c3\u30af\u30e1\u30bf\u30ea\u30c3\u30af": "Black Metallic",
+}
+
+ROMANIZED_COLOR_MAP = {
+    "howaitonoovuagarasufureeku": "White Nova Glass Flake",
+    "howaitonovuagarasufureeku": "White Nova Glass Flake",
+    "howaitonovagarasufureeku": "White Nova Glass Flake",
+    "howaitonovagarasufureku": "White Nova Glass Flake",
+    "burukkuringureemetarikku": "Brooklyn Gray Metallic",
+    "buruukkuringureemetarikku": "Brooklyn Gray Metallic",
+}
+
+ROMANIZED_COLOR_TOKEN_MAP = [
+    ("shainingu", "Shining"),
+    ("metarikku", "Metallic"),
+    ("howaito", "White"),
+    ("burakku", "Black"),
+    ("buruu", "Blue"),
+    ("guree", "Gray"),
+    ("guriin", "Green"),
+    ("gurin", "Green"),
+    ("reddo", "Red"),
+    ("orenji", "Orange"),
+    ("beju", "Beige"),
+    ("shirubaa", "Silver"),
+    ("shiruba", "Silver"),
+    ("paaru", "Pearl"),
+    ("arupin", "Alpine"),
+]
+ENGLISH_COLOR_KEYWORDS = {
+    "white",
+    "black",
+    "blue",
+    "gray",
+    "green",
+    "red",
+    "orange",
+    "beige",
+    "silver",
+    "pearl",
+    "metallic",
 }
 
 MODEL_REPLACEMENTS = {
@@ -116,6 +159,30 @@ def _title_or_upper_words(value: str) -> str:
     return " ".join(words)
 
 
+def _compact_ascii_key(value: str) -> str:
+    return ALNUM_RE.sub("", value.lower())
+
+
+def _normalize_romanized_color_phrase(value: str | None) -> str | None:
+    normalized = _normalize(value)
+    if normalized is None:
+        return None
+
+    text = normalized.lower()
+    replaced = text
+    for token, replacement in ROMANIZED_COLOR_TOKEN_MAP:
+        replaced = re.sub(token, f" {replacement} ", replaced, flags=re.IGNORECASE)
+
+    replaced = WHITESPACE_RE.sub(" ", replaced).strip()
+    if not replaced:
+        return None
+
+    words = [word.lower() for word in replaced.split(" ")]
+    if not any(keyword in words for keyword in ENGLISH_COLOR_KEYWORDS):
+        return None
+    return _title_or_upper_words(replaced)
+
+
 def _translate_generic(value: str | None) -> str | None:
     normalized = _normalize(value)
     if normalized is None:
@@ -155,6 +222,12 @@ def translate_color(value: str | None) -> str | None:
     mapped = COLOR_MAP.get(normalized)
     if mapped:
         return mapped
+    romanized_mapped = ROMANIZED_COLOR_MAP.get(_compact_ascii_key(normalized))
+    if romanized_mapped:
+        return romanized_mapped
+    romanized_phrase = _normalize_romanized_color_phrase(normalized)
+    if romanized_phrase:
+        return romanized_phrase
 
     if "\u30b0\u30ec\u30fc" in normalized and "\u30e1\u30bf\u30ea\u30c3\u30af" in normalized:
         return "Gray Metallic"
@@ -172,4 +245,13 @@ def translate_color(value: str | None) -> str | None:
         return "Pearl White"
 
     translated = _translate_generic(normalized)
-    return translated or normalized
+    if not translated:
+        return normalized
+
+    romanized_mapped = ROMANIZED_COLOR_MAP.get(_compact_ascii_key(translated))
+    if romanized_mapped:
+        return romanized_mapped
+    romanized_phrase = _normalize_romanized_color_phrase(translated)
+    if romanized_phrase:
+        return romanized_phrase
+    return translated

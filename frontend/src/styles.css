@@ -409,6 +409,56 @@ tbody td {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 16, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 30;
+  padding: 16px;
+}
+
+.modal {
+  width: min(540px, 100%);
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.modal h2 {
+  margin: 0 0 10px;
+  font-size: 1.25rem;
+}
+
+.modal p {
+  margin: 0 0 8px;
+  color: var(--text-soft);
+}
+
+.checkbox-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.checkbox-row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.modal-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 @media (max-width: 1040px) {
   .table-toolbar {
     grid-template-columns: 1fr 1fr;

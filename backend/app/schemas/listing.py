@@ -10,7 +10,8 @@ class ListingOut(BaseModel):
     brand: str
     model: str
     year: int | None
-    price: int
+    price: int | None
+    price_text: str | None
     price_jpy: int | None
     price_rub: int | None
     color: str | None

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from bs4 import UnicodeDammit
-from sqlalchemy import func, literal_column, or_, select, update
+from sqlalchemy import func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import (
@@ -35,6 +35,7 @@ from app.scraper.translator import translate_color, translate_make, translate_mo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+SENTINEL_PRICE_MAX = 2_147_483_647
 
 
 @dataclass
@@ -107,18 +108,10 @@ def _touch_discovered(candidates: list[ListingCandidate]) -> int:
 
 
 def _normalize_existing_translations() -> int:
-    cjk_regex = r"[ぁ-んァ-ヶ一-龠]"
-    needs_translation = or_(
-        Listing.maker.op("~")(cjk_regex),
-        Listing.model.op("~")(cjk_regex),
-        func.coalesce(Listing.color, "").op("~")(cjk_regex),
-    )
     updated = 0
 
     with SessionLocal() as session:
-        rows = session.scalars(
-            select(Listing).where(Listing.source == SOURCE_NAME).where(needs_translation)
-        ).all()
+        rows = session.scalars(select(Listing).where(Listing.source == SOURCE_NAME)).all()
 
         for row in rows:
             new_make = translate_make(row.maker) or row.maker
@@ -129,6 +122,65 @@ def _normalize_existing_translations() -> int:
                 row.maker = new_make
                 row.model = new_model
                 row.color = new_color
+                updated += 1
+
+        if updated:
+            session.commit()
+
+    return updated
+
+
+def _sanitize_legacy_prices() -> int:
+    updated = 0
+
+    def normalize_jpy(value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value >= SENTINEL_PRICE_MAX or value <= 0:
+            return None
+        if value < 10_000:
+            # Carsensor prices are in "man yen": value * 10_000.
+            return value * 10_000
+        return value
+
+    with SessionLocal() as session:
+        rows = session.scalars(select(Listing).where(Listing.source == SOURCE_NAME)).all()
+        for row in rows:
+            changed = False
+
+            normalized_price_jpy = normalize_jpy(row.price_jpy)
+            normalized_total_price_jpy = normalize_jpy(row.total_price_jpy)
+
+            if normalized_price_jpy != row.price_jpy:
+                row.price_jpy = normalized_price_jpy
+                changed = True
+
+            if normalized_total_price_jpy != row.total_price_jpy:
+                row.total_price_jpy = normalized_total_price_jpy
+                changed = True
+
+            if (
+                row.price_jpy is not None
+                and row.total_price_jpy is not None
+                and row.total_price_jpy < row.price_jpy
+            ):
+                row.total_price_jpy = None
+                changed = True
+
+            normalized_price_rub = int(round(row.price_jpy * JPY_TO_RUB_RATE)) if row.price_jpy is not None else None
+            normalized_total_price_rub = (
+                int(round(row.total_price_jpy * JPY_TO_RUB_RATE)) if row.total_price_jpy is not None else None
+            )
+
+            if normalized_price_rub != row.price_rub:
+                row.price_rub = normalized_price_rub
+                changed = True
+
+            if normalized_total_price_rub != row.total_price_rub:
+                row.total_price_rub = normalized_total_price_rub
+                changed = True
+
+            if changed:
                 updated += 1
 
         if updated:
@@ -374,14 +426,22 @@ def _cleanup_stale() -> tuple[int, int]:
 
 def run_cycle() -> None:
     client = HttpClient()
+    normalized = _normalize_existing_translations()
+    sanitized_prices = _sanitize_legacy_prices()
     candidates = discover_candidates(client)
     discovered = len(candidates)
     if not candidates:
-        logger.warning("No listing candidates discovered.")
+        stale_deactivated, deleted = _cleanup_stale()
+        logger.warning(
+            "No listing candidates discovered. normalized=%s sanitized_prices=%s deactivated=%s deleted=%s",
+            normalized,
+            sanitized_prices,
+            stale_deactivated,
+            deleted,
+        )
         return
 
     _touch_discovered(candidates)
-    normalized = _normalize_existing_translations()
     selected, html_cache, selected_distribution = select_candidates_by_make(
         client=client,
         candidates=candidates,
@@ -398,7 +458,7 @@ def run_cycle() -> None:
 
     parsed_make_distribution = dict(Counter([item.make for item in process_result.parsed]))
     logger.info(
-        "Worker summary: discovered=%s processed=%s inserted=%s updated=%s deactivated=%s failed_parse=%s normalized=%s distribution_selected=%s distribution_parsed=%s",
+        "Worker summary: discovered=%s processed=%s inserted=%s updated=%s deactivated=%s failed_parse=%s normalized=%s sanitized_prices=%s distribution_selected=%s distribution_parsed=%s",
         discovered,
         process_result.processed,
         inserted,
@@ -406,6 +466,7 @@ def run_cycle() -> None:
         immediate_deactivated + stale_deactivated,
         process_result.failed_parse,
         normalized,
+        sanitized_prices,
         selected_distribution,
         parsed_make_distribution,
     )

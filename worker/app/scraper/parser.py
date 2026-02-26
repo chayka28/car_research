@@ -40,6 +40,15 @@ PRICE_MANYEN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\u4e07")
 MILEAGE_MANYEN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\u4e07\s*km", re.IGNORECASE)
 PAREN_COLOR_RE = re.compile(r"[\uFF08(]\s*([^()\uFF08\uFF09]+)\s*[\uFF09)]")
 SPACE_RE = re.compile(r"\s+")
+MANYEN_MULTIPLIER = 10_000
+PRICE_NOT_SPECIFIED_MARKERS = (
+    "\u5fdc\u8ac7",
+    "\u4fa1\u683c\u5fdc\u8ac7",
+    "\u8981\u76f8\u8ac7",
+    "\u8981\u554f\u5408\u305b",
+    "ASK",
+    "TBD",
+)
 
 
 @dataclass
@@ -49,8 +58,8 @@ class ListingData:
     make: str
     model: str
     year: int
-    price_jpy: int
-    price_rub: int
+    price_jpy: int | None
+    price_rub: int | None
     color: str
     grade: str | None
     mileage_km: int | None
@@ -107,6 +116,35 @@ def _to_int_digits(value: str | None) -> int | None:
         return int(digits)
     except ValueError:
         return None
+
+
+def _price_node_text(node) -> str | None:
+    if node is None:
+        return None
+    text = "".join(node.stripped_strings).replace(",", "").replace("，", "").replace(" ", "")
+    return text or None
+
+
+def _parse_manyen_text_to_jpy(value: str | None) -> int | None:
+    if not value:
+        return None
+    normalized = value.replace("．", ".").replace(",", "").replace("，", "").replace(" ", "")
+    manyen_match = PRICE_MANYEN_RE.search(normalized)
+    if not manyen_match:
+        return None
+    try:
+        return int(round(float(manyen_match.group(1)) * MANYEN_MULTIPLIER))
+    except ValueError:
+        return None
+
+
+def _parse_numeric_content_to_jpy(content_value: str | None) -> int | None:
+    parsed = _to_int_digits(content_value.replace(",", "").replace("，", "")) if content_value else None
+    if parsed is None:
+        return None
+    if parsed < MANYEN_MULTIPLIER:
+        return parsed * MANYEN_MULTIPLIER
+    return parsed
 
 
 def _parse_mileage_km(value: str | None) -> int | None:
@@ -194,25 +232,31 @@ def _parse_base_price_jpy(soup: BeautifulSoup, url: str) -> tuple[int | None, st
         logger.warning("Price tag missing for %s", url)
         return None, message
 
+    text_value = _price_node_text(price_tag)
+    if text_value:
+        upper_text = text_value.upper()
+        if any(marker in text_value or marker in upper_text for marker in PRICE_NOT_SPECIFIED_MARKERS):
+            logger.info("Price is marked as not specified for %s", url)
+            return None, "price_not_specified"
+
+        manyen_price = _parse_manyen_text_to_jpy(text_value)
+        if manyen_price is not None:
+            return manyen_price, None
+
     content_value = price_tag.get("content")
     if content_value:
-        parsed = _to_int_digits(str(content_value).replace(",", ""))
+        parsed = _parse_numeric_content_to_jpy(str(content_value))
         if parsed is not None:
             return parsed, None
         logger.warning("Failed to parse base price content for %s. content=%r", url, content_value)
     else:
         logger.warning("Price content attribute missing for %s", url)
 
-    text_value = _node_text(price_tag)
     if text_value:
-        manyen_match = PRICE_MANYEN_RE.search(text_value)
-        if manyen_match:
-            try:
-                return int(round(float(manyen_match.group(1)) * 10000)), None
-            except ValueError:
-                pass
         parsed_digits = _to_int_digits(text_value)
         if parsed_digits is not None:
+            if parsed_digits < MANYEN_MULTIPLIER:
+                return parsed_digits * MANYEN_MULTIPLIER, None
             return parsed_digits, None
 
     return None, "price_content_missing_or_invalid"
@@ -222,23 +266,31 @@ def _parse_total_price_jpy(soup: BeautifulSoup) -> int | None:
     node = soup.select_one("p.totalPrice__price")
     if node is None:
         return None
+
+    text_value = _price_node_text(node)
+    if text_value:
+        upper_text = text_value.upper()
+        if any(marker in text_value or marker in upper_text for marker in PRICE_NOT_SPECIFIED_MARKERS):
+            return None
+
+        manyen_price = _parse_manyen_text_to_jpy(text_value)
+        if manyen_price is not None:
+            return manyen_price
+
     content_value = node.get("content")
     if content_value:
-        parsed = _to_int_digits(str(content_value).replace(",", ""))
+        parsed = _parse_numeric_content_to_jpy(str(content_value))
         if parsed is not None:
             return parsed
 
-    text_value = _node_text(node)
     if not text_value:
         return None
-
-    manyen_match = PRICE_MANYEN_RE.search(text_value)
-    if manyen_match:
-        try:
-            return int(round(float(manyen_match.group(1)) * 10000))
-        except ValueError:
-            return None
-    return _to_int_digits(text_value)
+    parsed_digits = _to_int_digits(text_value)
+    if parsed_digits is None:
+        return None
+    if parsed_digits < MANYEN_MULTIPLIER:
+        return parsed_digits * MANYEN_MULTIPLIER
+    return parsed_digits
 
 
 def check_listing_unavailable(html: str, final_url: str) -> bool:
@@ -291,14 +343,19 @@ def parse_listing_html(
         )
 
     price_jpy, price_error = _parse_base_price_jpy(soup, url)
-    if price_jpy is None:
-        return ParseFailure(
-            error_type="missing_price",
-            message=f"Missing price_jpy ({price_error or 'unknown'})",
-            debug_snippet=html[:800],
-        )
-
     total_price_jpy = _parse_total_price_jpy(soup)
+    if price_jpy is not None and total_price_jpy is not None and total_price_jpy < price_jpy:
+        logger.warning(
+            "Total price looks invalid for %s (total=%s < base=%s). Dropping total price.",
+            url,
+            total_price_jpy,
+            price_jpy,
+        )
+        total_price_jpy = None
+
+    if price_jpy is None and total_price_jpy is None:
+        logger.info("Price not specified for %s (%s)", url, price_error or "unknown")
+
     mileage_km = _parse_mileage_km(label_map.get(MILEAGE_LABEL))
 
     prefecture = label_map.get(REGION_LABEL)
@@ -316,7 +373,7 @@ def parse_listing_html(
     translated_model = model or "Unknown"
     translated_color = color or "Unknown"
 
-    price_rub = int(round(price_jpy * jpy_to_rub_rate))
+    price_rub = int(round(price_jpy * jpy_to_rub_rate)) if price_jpy is not None else None
     total_price_rub = int(round(total_price_jpy * jpy_to_rub_rate)) if total_price_jpy is not None else None
 
     return ListingData(

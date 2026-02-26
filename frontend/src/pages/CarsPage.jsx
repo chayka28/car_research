@@ -6,6 +6,7 @@ import { clearToken, getToken } from "../lib/auth";
 
 const PAGE_SIZE = 100;
 const THEME_STORAGE_KEY = "car_research_theme";
+const DELETE_CONFIRM_STORAGE_KEY = "car_research_skip_delete_confirm";
 
 function formatPrice(value) {
   if (!Number.isFinite(value)) {
@@ -77,6 +78,11 @@ export default function CarsPage() {
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
   const [theme, setTheme] = useState(() => window.localStorage.getItem(THEME_STORAGE_KEY) || "light");
+  const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
+  const [dontShowDeleteConfirm, setDontShowDeleteConfirm] = useState(false);
+  const [skipDeleteConfirm, setSkipDeleteConfirm] = useState(
+    () => window.localStorage.getItem(DELETE_CONFIRM_STORAGE_KEY) === "1"
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -91,6 +97,22 @@ export default function CarsPage() {
     document.documentElement.setAttribute("data-theme", theme);
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!pendingDeleteItem) {
+      return undefined;
+    }
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setPendingDeleteItem(null);
+        setDontShowDeleteConfirm(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingDeleteItem]);
 
   const loadListings = async () => {
     setIsLoading(true);
@@ -159,12 +181,7 @@ export default function CarsPage() {
     setSortBy(field);
   };
 
-  const onDelete = async (listingId) => {
-    const confirmed = window.confirm("Удалить это объявление? Действие необратимо.");
-    if (!confirmed) {
-      return;
-    }
-
+  const deleteListingById = async (listingId) => {
     const token = getToken();
     if (!token) {
       navigate("/login", { replace: true });
@@ -191,6 +208,37 @@ export default function CarsPage() {
     } finally {
       setDeletingId(null);
     }
+  };
+
+  const onDeleteClick = (item) => {
+    if (skipDeleteConfirm) {
+      void deleteListingById(item.id);
+      return;
+    }
+
+    setDontShowDeleteConfirm(false);
+    setPendingDeleteItem(item);
+  };
+
+  const onCancelDelete = () => {
+    setPendingDeleteItem(null);
+    setDontShowDeleteConfirm(false);
+  };
+
+  const onConfirmDelete = async () => {
+    if (!pendingDeleteItem) {
+      return;
+    }
+
+    if (dontShowDeleteConfirm) {
+      window.localStorage.setItem(DELETE_CONFIRM_STORAGE_KEY, "1");
+      setSkipDeleteConfirm(true);
+    }
+
+    const listingId = pendingDeleteItem.id;
+    setPendingDeleteItem(null);
+    setDontShowDeleteConfirm(false);
+    await deleteListingById(listingId);
   };
 
   return (
@@ -348,7 +396,7 @@ export default function CarsPage() {
                         <td>{item.brand}</td>
                         <td>{item.model}</td>
                         <td>{item.year || "-"}</td>
-                        <td>{formatPrice(item.price)}</td>
+                        <td>{item.price_text || formatPrice(item.price)}</td>
                         <td>{item.color || "-"}</td>
                         <td>
                           <span className={`status-pill ${item.is_active ? "active" : "inactive"}`}>
@@ -364,7 +412,7 @@ export default function CarsPage() {
                         <td>
                           <button
                             className="danger ghost"
-                            onClick={() => onDelete(item.id)}
+                            onClick={() => onDeleteClick(item)}
                             disabled={deletingId === item.id}
                           >
                             {deletingId === item.id ? "Удаление..." : "Удалить"}
@@ -405,6 +453,36 @@ export default function CarsPage() {
           ) : null}
         </section>
       </div>
+
+      {pendingDeleteItem ? (
+        <div className="modal-backdrop" role="presentation" onClick={onCancelDelete}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" onClick={(event) => event.stopPropagation()}>
+            <h2 id="delete-modal-title">Подтвердите удаление</h2>
+            <p>
+              Вы действительно хотите удалить объявление <strong>{pendingDeleteItem.brand}</strong> <strong>{pendingDeleteItem.model}</strong> ({pendingDeleteItem.external_id})?
+            </p>
+            <p>Действие необратимо.</p>
+
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={dontShowDeleteConfirm}
+                onChange={(event) => setDontShowDeleteConfirm(event.target.checked)}
+              />
+              <span>Не показывать это сообщение снова</span>
+            </label>
+
+            <div className="modal-actions">
+              <button className="secondary" onClick={onCancelDelete} disabled={deletingId === pendingDeleteItem.id}>
+                Отмена
+              </button>
+              <button className="danger" onClick={onConfirmDelete} disabled={deletingId === pendingDeleteItem.id}>
+                {deletingId === pendingDeleteItem.id ? "Удаление..." : "Удалить"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
