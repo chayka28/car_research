@@ -39,5 +39,14 @@ services:
       - db
       - backend
 
+  bot:
+    build:
+      context: ./bot
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - worker
+
 volumes:
   pg_data:

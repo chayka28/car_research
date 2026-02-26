@@ -60,3 +60,15 @@ class FailedScrape(Base):
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     debug_snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+
+
+class ScrapeRequest(Base):
+    __tablename__ = "scrape_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="carsensor", index=True)
+    requested_by: Mapped[str] = mapped_column(String(64), nullable=False, default="telegram_bot")
+    query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

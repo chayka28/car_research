@@ -48,6 +48,9 @@ docker compose up -d worker
 - On each discover: `last_seen_at=now`, `is_active=true`.
 - Deactivate stale records older than `INACTIVE_AFTER_DAYS`.
 - Delete old inactive records older than `DELETE_AFTER_DAYS`.
+- Supports `scrape_requests` queue:
+  - bot inserts `pending` requests when no results found;
+  - worker detects pending requests and runs next cycle early.
 
 ## Main ENV
 - `MAX_SITEMAPS`

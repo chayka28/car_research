@@ -1,5 +1,5 @@
 from app.models.car import Car
-from app.models.listing import FailedScrape, Listing
+from app.models.listing import FailedScrape, Listing, ScrapeRequest
 from app.models.user import User
 
-__all__ = ["User", "Car", "Listing", "FailedScrape"]
+__all__ = ["User", "Car", "Listing", "FailedScrape", "ScrapeRequest"]

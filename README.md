@@ -6,6 +6,7 @@ Service for collecting car listings from Carsensor, exposing them in admin API/U
 - `backend`: FastAPI + JWT auth + SQLAlchemy + Alembic
 - `frontend`: SPA admin panel
 - `worker`: Carsensor scraper (sitemaps -> detail pages -> PostgreSQL upsert)
+- `bot`: aiogram + OpenAI Function Calling + DB search
 - `db`: PostgreSQL 16
 
 ## Quick start
@@ -60,6 +61,23 @@ docker compose logs -f worker
 - `JPY_TO_RUB_RATE`
 - `INACTIVE_AFTER_DAYS`
 - `DELETE_AFTER_DAYS`
+
+## Telegram bot
+- reads free-form user query;
+- extracts filters through OpenAI Function Calling;
+- searches only PostgreSQL `listings`;
+- returns cards with inline navigation;
+- requests scraper refresh if no matches found.
+
+Required env:
+- `TELEGRAM_BOT_TOKEN`
+- `OPENAI_API_KEY` (or `LLM_API_KEY`)
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
+
+Logs:
+```powershell
+docker compose logs -f bot
+```
 
 ## Migrations
 Backend applies Alembic automatically at container startup.

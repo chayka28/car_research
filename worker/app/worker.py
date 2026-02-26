@@ -21,11 +21,12 @@ from app.config import (
     MAX_SITEMAPS,
     PER_MAKE_LIMIT,
     POOL_SIZE,
+    SCRAPE_TRIGGER_POLL_SECONDS,
     SOURCE_NAME,
     UPSERT_BATCH_SIZE,
     WORKER_RUN_ONCE,
 )
-from app.db import FailedScrape, Listing, SessionLocal
+from app.db import FailedScrape, Listing, ScrapeRequest, SessionLocal
 from app.scraper.client import HttpClient, HttpRequestError
 from app.scraper.parser import ListingData, ParseFailure, parse_listing_html
 from app.scraper.selector import select_candidates_by_make
@@ -187,6 +188,40 @@ def _sanitize_legacy_prices() -> int:
             session.commit()
 
     return updated
+
+
+def _pending_scrape_requests_count() -> int:
+    with SessionLocal() as session:
+        count = (
+            session.scalar(
+                select(func.count())
+                .select_from(ScrapeRequest)
+                .where(ScrapeRequest.source == SOURCE_NAME)
+                .where(ScrapeRequest.status == "pending")
+            )
+            or 0
+        )
+    return int(count)
+
+
+def _mark_pending_scrape_requests_done() -> int:
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(ScrapeRequest)
+            .where(ScrapeRequest.source == SOURCE_NAME)
+            .where(ScrapeRequest.status == "pending")
+            .order_by(ScrapeRequest.requested_at.asc())
+        ).all()
+
+        if not rows:
+            return 0
+
+        for row in rows:
+            row.status = "done"
+            row.processed_at = now
+        session.commit()
+    return len(rows)
 
 
 def _process_single_candidate(
@@ -431,11 +466,13 @@ def run_cycle() -> None:
     candidates = discover_candidates(client)
     discovered = len(candidates)
     if not candidates:
+        processed_requests = _mark_pending_scrape_requests_done()
         stale_deactivated, deleted = _cleanup_stale()
         logger.warning(
-            "No listing candidates discovered. normalized=%s sanitized_prices=%s deactivated=%s deleted=%s",
+            "No listing candidates discovered. normalized=%s sanitized_prices=%s processed_requests=%s deactivated=%s deleted=%s",
             normalized,
             sanitized_prices,
+            processed_requests,
             stale_deactivated,
             deleted,
         )
@@ -452,13 +489,14 @@ def run_cycle() -> None:
     process_result = _process_candidates(client=client, candidates=selected, html_cache=html_cache)
     inserted, updated = _upsert_listings(process_result.parsed)
     _insert_failures(process_result.failed_rows)
+    processed_requests = _mark_pending_scrape_requests_done()
 
     immediate_deactivated = _mark_unavailable(process_result.unavailable_external_ids)
     stale_deactivated, deleted = _cleanup_stale()
 
     parsed_make_distribution = dict(Counter([item.make for item in process_result.parsed]))
     logger.info(
-        "Worker summary: discovered=%s processed=%s inserted=%s updated=%s deactivated=%s failed_parse=%s normalized=%s sanitized_prices=%s distribution_selected=%s distribution_parsed=%s",
+        "Worker summary: discovered=%s processed=%s inserted=%s updated=%s deactivated=%s failed_parse=%s normalized=%s sanitized_prices=%s processed_requests=%s distribution_selected=%s distribution_parsed=%s",
         discovered,
         process_result.processed,
         inserted,
@@ -467,6 +505,7 @@ def run_cycle() -> None:
         process_result.failed_parse,
         normalized,
         sanitized_prices,
+        processed_requests,
         selected_distribution,
         parsed_make_distribution,
     )
@@ -500,6 +539,14 @@ def main() -> None:
             return
 
         elapsed = time.time() - started
-        sleep_seconds = max(1, INTERVAL_SECONDS - int(elapsed))
-        logger.info("Next cycle in %ss.", sleep_seconds)
-        time.sleep(sleep_seconds)
+        remaining = max(1, INTERVAL_SECONDS - int(elapsed))
+        logger.info("Next cycle in %ss.", remaining)
+
+        while remaining > 0:
+            if _pending_scrape_requests_count() > 0:
+                logger.info("Pending scrape request detected. Starting next cycle early.")
+                break
+
+            chunk = min(SCRAPE_TRIGGER_POLL_SECONDS, remaining)
+            time.sleep(chunk)
+            remaining -= chunk
