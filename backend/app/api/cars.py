@@ -14,6 +14,8 @@ from app.schemas.listing import ListingOut, ListingPageOut
 
 router = APIRouter(prefix="/api", tags=["cars"])
 SENTINEL_PRICE_MAX = 2_147_483_647
+PLACEHOLDER_PRICE_VALUES = {999_999_999, 99_999_999, 69_999_999, 619_999_999}
+MAX_REASONABLE_PRICE = 80_000_000
 PRICE_NOT_SPECIFIED_TEXT = "price not specified"
 
 
@@ -21,6 +23,10 @@ def _normalize_price(value: int | None) -> int | None:
     if value is None:
         return None
     if value <= 0 or value >= SENTINEL_PRICE_MAX:
+        return None
+    if value in PLACEHOLDER_PRICE_VALUES:
+        return None
+    if value > MAX_REASONABLE_PRICE:
         return None
     return value
 

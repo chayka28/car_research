@@ -1,16 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from datetime import datetime
 from html import escape
 
-from app.schemas import ListingCard
+from app.schemas import ListingCard, SearchFilters
 
 
-def _text(value: object | None, fallback: str = "не указано") -> str:
+def _safe(value: object | None, default: str = "не указано") -> str:
     if value is None:
-        return fallback
+        return default
     text = str(value).strip()
-    return escape(text) if text else fallback
+    return escape(text) if text else default
 
 
 def _price(value: int | None) -> str:
@@ -19,50 +18,29 @@ def _price(value: int | None) -> str:
     return f"{value:,}".replace(",", " ") + " ₽"
 
 
-def _jpy(value: int | None) -> str:
-    if value is None:
-        return "price not specified"
-    return f"{value:,}".replace(",", " ") + " JPY"
-
-
-def _date(value: datetime | None) -> str:
-    if value is None:
-        return "не указано"
-    return value.strftime("%d.%m.%Y %H:%M")
-
-
-def build_listing_text(card: ListingCard, index: int, total: int, query: str) -> str:
+def build_listing_card_text(*, card: ListingCard, page: int, pages: int) -> str:
+    title = f"{_safe(card.maker)} {_safe(card.model)}, {_safe(card.year)}"
     return "\n".join(
         [
-            f"<b>Вариант {index + 1} из {total}</b>",
-            f"<b>Запрос:</b> {_text(query)}",
+            f"<b>{title}</b>",
+            f"Цвет: {_safe(card.color)}",
+            f"Цена: {_price(card.price_rub)}",
+            f"Ссылка: {_safe(card.url)}",
+            f"ID: {_safe(card.external_id)}",
             "",
-            f"<b>Марка:</b> {_text(card.maker)}",
-            f"<b>Модель:</b> {_text(card.model)}",
-            f"<b>Комплектация:</b> {_text(card.grade)}",
-            f"<b>Год:</b> {_text(card.year)}",
-            f"<b>Цвет:</b> {_text(card.color)}",
-            f"<b>Пробег:</b> {_text(card.mileage_km, '-') } км",
-            "",
-            f"<b>Цена (RUB):</b> {_price(card.effective_price_rub)}",
-            f"<b>Цена авто (JPY):</b> {_jpy(card.price_jpy)}",
-            f"<b>Итоговая цена (JPY):</b> {_jpy(card.total_price_jpy)}",
-            "",
-            f"<b>Регион:</b> {_text(card.prefecture)}",
-            f"<b>Трансмиссия:</b> {_text(card.transmission)}",
-            f"<b>Привод:</b> {_text(card.drive_type)}",
-            f"<b>Объем двигателя:</b> {_text(card.engine_cc)}",
-            f"<b>Топливо:</b> {_text(card.fuel)}",
-            f"<b>Руль:</b> {_text(card.steering)}",
-            f"<b>Кузов:</b> {_text(card.body_type)}",
-            "",
-            f"<b>Салон:</b> {_text(card.shop_name)}",
-            f"<b>Адрес:</b> {_text(card.shop_address)}",
-            f"<b>Телефон:</b> {_text(card.shop_phone)}",
-            "",
-            f"<b>Статус:</b> {'активно' if card.is_active else 'неактивно'}",
-            f"<b>Обновлено:</b> {_date(card.last_seen_at)}",
-            f"<b>ID:</b> {_text(card.external_id)}",
-            f"<b>Источник:</b> <a href=\"{escape(card.url)}\">открыть объявление</a>",
+            f"{page}/{pages}",
         ]
     )
+
+
+def build_filter_summary(filters: SearchFilters) -> str:
+    parts = [
+        f"Марка: {_safe(filters.make, '-')}",
+        f"Модель: {_safe(filters.model, '-')}",
+        f"Цвет: {_safe(filters.color, '-')}",
+        f"Исключить цвета: {', '.join(filters.exclude_colors) if filters.exclude_colors else '-'}",
+        f"Год: {filters.year_min or '-'} .. {filters.year_max or '-'}",
+        f"Цена, ₽: {filters.price_min_rub or '-'} .. {filters.price_max_rub or '-'}",
+        f"Сортировка: {filters.sort}",
+    ]
+    return "\n".join(parts)

@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -41,6 +41,8 @@ MILEAGE_MANYEN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\u4e07\s*km", re.IGNORECASE)
 PAREN_COLOR_RE = re.compile(r"[\uFF08(]\s*([^()\uFF08\uFF09]+)\s*[\uFF09)]")
 SPACE_RE = re.compile(r"\s+")
 MANYEN_MULTIPLIER = 10_000
+PRICE_NOT_SPECIFIED_JPY_THRESHOLD = 90_000_000
+INVALID_PRICE_JPY_VALUES = {99_999_999, 999_999_999}
 PRICE_NOT_SPECIFIED_MARKERS = (
     "\u5fdc\u8ac7",
     "\u4fa1\u683c\u5fdc\u8ac7",
@@ -121,30 +123,43 @@ def _to_int_digits(value: str | None) -> int | None:
 def _price_node_text(node) -> str | None:
     if node is None:
         return None
-    text = "".join(node.stripped_strings).replace(",", "").replace("，", "").replace(" ", "")
+    text = "".join(node.stripped_strings).replace(",", "").replace("пјЊ", "").replace(" ", "")
     return text or None
 
 
 def _parse_manyen_text_to_jpy(value: str | None) -> int | None:
     if not value:
         return None
-    normalized = value.replace("．", ".").replace(",", "").replace("，", "").replace(" ", "")
+    normalized = value.replace("пјЋ", ".").replace(",", "").replace("пјЊ", "").replace(" ", "")
     manyen_match = PRICE_MANYEN_RE.search(normalized)
     if not manyen_match:
         return None
     try:
-        return int(round(float(manyen_match.group(1)) * MANYEN_MULTIPLIER))
+        parsed = int(round(float(manyen_match.group(1)) * MANYEN_MULTIPLIER))
     except ValueError:
         return None
+    return _sanitize_price_jpy(parsed)
+
+
+def _sanitize_price_jpy(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value <= 0:
+        return None
+    if value in INVALID_PRICE_JPY_VALUES:
+        return None
+    if value >= PRICE_NOT_SPECIFIED_JPY_THRESHOLD:
+        return None
+    return value
 
 
 def _parse_numeric_content_to_jpy(content_value: str | None) -> int | None:
-    parsed = _to_int_digits(content_value.replace(",", "").replace("，", "")) if content_value else None
+    parsed = _to_int_digits(content_value.replace(",", "").replace("пјЊ", "")) if content_value else None
     if parsed is None:
         return None
     if parsed < MANYEN_MULTIPLIER:
-        return parsed * MANYEN_MULTIPLIER
-    return parsed
+        parsed *= MANYEN_MULTIPLIER
+    return _sanitize_price_jpy(parsed)
 
 
 def _parse_mileage_km(value: str | None) -> int | None:
@@ -256,8 +271,10 @@ def _parse_base_price_jpy(soup: BeautifulSoup, url: str) -> tuple[int | None, st
         parsed_digits = _to_int_digits(text_value)
         if parsed_digits is not None:
             if parsed_digits < MANYEN_MULTIPLIER:
-                return parsed_digits * MANYEN_MULTIPLIER, None
-            return parsed_digits, None
+                parsed_digits *= MANYEN_MULTIPLIER
+            parsed_digits = _sanitize_price_jpy(parsed_digits)
+            if parsed_digits is not None:
+                return parsed_digits, None
 
     return None, "price_content_missing_or_invalid"
 
@@ -289,8 +306,8 @@ def _parse_total_price_jpy(soup: BeautifulSoup) -> int | None:
     if parsed_digits is None:
         return None
     if parsed_digits < MANYEN_MULTIPLIER:
-        return parsed_digits * MANYEN_MULTIPLIER
-    return parsed_digits
+        parsed_digits *= MANYEN_MULTIPLIER
+    return _sanitize_price_jpy(parsed_digits)
 
 
 def check_listing_unavailable(html: str, final_url: str) -> bool:
@@ -401,3 +418,4 @@ def parse_listing_html(
         body_type=body_type,
         scraped_at=datetime.now(timezone.utc),
     )
+

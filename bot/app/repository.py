@@ -1,32 +1,58 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select
 
 from app.config import SETTINGS
 from app.db import SessionLocal
-from app.models import Listing, ScrapeRequest
-from app.schemas import ListingCard, SearchFilters
+from app.models import Favorite, Listing, ScrapeRequest
+from app.schemas import ListingCard, PagedResult, SearchFilters
+
+SENTINEL_PRICE_MAX = 2_147_483_647
+PLACEHOLDER_PRICE_VALUES = {999_999_999, 99_999_999, 69_999_999, 619_999_999}
+MAX_REASONABLE_PRICE_RUB = 80_000_000
 
 
-def _norm(term: str) -> str:
-    return term.strip().lower()
+def _normalize_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return text if text else None
 
 
-def _price_rub(row: Listing) -> int | None:
-    if row.total_price_rub and row.total_price_rub > 0:
-        return row.total_price_rub
-    if row.price_rub and row.price_rub > 0:
-        return row.price_rub
-    if row.total_price_jpy and row.total_price_jpy > 0:
-        return int(round(row.total_price_jpy * SETTINGS.jpy_to_rub_rate))
-    if row.price_jpy and row.price_jpy > 0:
-        return int(round(row.price_jpy * SETTINGS.jpy_to_rub_rate))
+def _norm_like(value: str) -> str:
+    return f"%{value.strip().lower()}%"
+
+
+def _price_value_valid(value: int | None) -> bool:
+    if value is None:
+        return False
+    if value <= 0:
+        return False
+    if value >= SENTINEL_PRICE_MAX:
+        return False
+    if value in PLACEHOLDER_PRICE_VALUES:
+        return False
+    if value > MAX_REASONABLE_PRICE_RUB:
+        return False
+    return True
+
+
+def _effective_price_rub(row: Listing) -> int | None:
+    candidate_values: list[int | None] = [
+        row.total_price_rub,
+        row.price_rub,
+        int(round(row.total_price_jpy * SETTINGS.jpy_to_rub_rate)) if row.total_price_jpy is not None else None,
+        int(round(row.price_jpy * SETTINGS.jpy_to_rub_rate)) if row.price_jpy is not None else None,
+    ]
+    for value in candidate_values:
+        if _price_value_valid(value):
+            return value
     return None
 
 
-def _card_from_row(row: Listing) -> ListingCard:
+def _card(row: Listing) -> ListingCard:
     return ListingCard(
         id=row.id,
         external_id=row.external_id,
@@ -34,101 +60,183 @@ def _card_from_row(row: Listing) -> ListingCard:
         url=row.url,
         maker=row.maker,
         model=row.model,
-        grade=row.grade,
-        color=row.color,
         year=row.year,
-        mileage_km=row.mileage_km,
-        price_jpy=row.price_jpy,
-        price_rub=row.price_rub,
-        total_price_jpy=row.total_price_jpy,
-        total_price_rub=row.total_price_rub,
-        effective_price_rub=_price_rub(row),
-        prefecture=row.prefecture,
-        shop_name=row.shop_name,
-        shop_address=row.shop_address,
-        shop_phone=row.shop_phone,
-        transmission=row.transmission,
-        drive_type=row.drive_type,
-        engine_cc=row.engine_cc,
-        fuel=row.fuel,
-        steering=row.steering,
-        body_type=row.body_type,
-        is_active=row.is_active,
+        color=row.color,
+        price_rub=_effective_price_rub(row),
         last_seen_at=row.last_seen_at,
+        is_active=row.is_active,
     )
 
 
-def search_listings(filters: SearchFilters, limit: int) -> list[ListingCard]:
-    like = lambda value: f"%{_norm(value)}%"  # noqa: E731
+def _base_listing_stmt(filters: SearchFilters, query_text: str | None = None):
+    stmt = (
+        select(Listing)
+        .where(Listing.source == "carsensor")
+        .where(Listing.deleted_at.is_(None))
+        .where(Listing.maker != "Unknown")
+        .where(Listing.model != "Unknown")
+    )
 
+    if filters.only_active:
+        stmt = stmt.where(Listing.is_active.is_(True))
+
+    if filters.make:
+        stmt = stmt.where(func.lower(Listing.maker).like(_norm_like(filters.make)))
+    if filters.model:
+        stmt = stmt.where(func.lower(Listing.model).like(_norm_like(filters.model)))
+    if filters.color:
+        stmt = stmt.where(func.lower(func.coalesce(Listing.color, "")).like(_norm_like(filters.color)))
+
+    for item in filters.exclude_colors:
+        stmt = stmt.where(func.lower(func.coalesce(Listing.color, "")).not_like(_norm_like(item)))
+
+    if filters.year_min is not None:
+        stmt = stmt.where(Listing.year.is_not(None)).where(Listing.year >= filters.year_min)
+    if filters.year_max is not None:
+        stmt = stmt.where(Listing.year.is_not(None)).where(Listing.year <= filters.year_max)
+
+    if query_text:
+        term = _norm_like(query_text)
+        stmt = stmt.where(
+            or_(
+                func.lower(Listing.maker).like(term),
+                func.lower(Listing.model).like(term),
+                func.lower(func.coalesce(Listing.color, "")).like(term),
+                func.lower(Listing.external_id).like(term),
+            )
+        )
+
+    return stmt
+
+
+def _ordered_rows(
+    *,
+    filters: SearchFilters,
+    query_text: str | None,
+) -> list[Listing]:
+    stmt = _base_listing_stmt(filters, query_text=query_text)
+    if filters.sort == "price_asc":
+        stmt = stmt.order_by(Listing.total_price_rub.asc().nullslast(), Listing.price_rub.asc().nullslast(), Listing.id.asc())
+    elif filters.sort == "price_desc":
+        stmt = stmt.order_by(
+            Listing.total_price_rub.desc().nullslast(),
+            Listing.price_rub.desc().nullslast(),
+            Listing.id.desc(),
+        )
+    else:
+        stmt = stmt.order_by(Listing.last_seen_at.desc(), Listing.id.desc())
+
+    with SessionLocal() as session:
+        rows = session.scalars(stmt.limit(5000)).all()
+    return rows
+
+
+def _paginate(items: list[ListingCard], page: int, page_size: int) -> PagedResult:
+    safe_page_size = max(1, page_size)
+    total = len(items)
+    pages = max(1, (total + safe_page_size - 1) // safe_page_size) if total else 1
+    current = min(max(1, page), pages)
+    start = (current - 1) * safe_page_size
+    end = start + safe_page_size
+    return PagedResult(items=items[start:end], total=total, page=current, pages=pages)
+
+
+def search_cars(
+    *,
+    filters: SearchFilters,
+    page: int,
+    page_size: int,
+    query_text: str | None = None,
+) -> PagedResult:
+    rows = _ordered_rows(filters=filters, query_text=query_text)
+    cards = [_card(row) for row in rows]
+
+    filtered_cards: list[ListingCard] = []
+    for item in cards:
+        if filters.price_min_rub is not None:
+            if item.price_rub is None or item.price_rub < filters.price_min_rub:
+                continue
+        if filters.price_max_rub is not None:
+            if item.price_rub is None or item.price_rub > filters.price_max_rub:
+                continue
+        filtered_cards.append(item)
+
+    return _paginate(filtered_cards, page=page, page_size=page_size)
+
+
+def recent_cars(*, page: int, page_size: int) -> PagedResult:
+    filters = SearchFilters(sort="newest", only_active=True)
+    return search_cars(filters=filters, page=page, page_size=page_size)
+
+
+def favorite_cars(*, user_id: int, page: int, page_size: int) -> PagedResult:
     with SessionLocal() as session:
         stmt = (
             select(Listing)
-            .where(Listing.source == "carsensor")
-            .where(Listing.deleted_at.is_(None))
-            .where(Listing.maker != "Unknown")
-            .where(Listing.model != "Unknown")
-        )
-
-        if filters.only_active:
-            stmt = stmt.where(Listing.is_active.is_(True))
-
-        if filters.include_makes:
-            stmt = stmt.where(or_(*[func.lower(Listing.maker).like(like(item)) for item in filters.include_makes]))
-        if filters.include_models:
-            stmt = stmt.where(or_(*[func.lower(Listing.model).like(like(item)) for item in filters.include_models]))
-        if filters.include_colors:
-            stmt = stmt.where(
-                or_(*[func.lower(func.coalesce(Listing.color, "")).like(like(item)) for item in filters.include_colors])
+            .join(
+                Favorite,
+                and_(
+                    Favorite.source == Listing.source,
+                    Favorite.external_id == Listing.external_id,
+                ),
             )
+            .where(Favorite.user_id == user_id)
+            .where(Listing.deleted_at.is_(None))
+            .order_by(Favorite.created_at.desc(), Listing.id.desc())
+            .limit(5000)
+        )
+        rows = session.scalars(stmt).all()
 
-        for item in filters.exclude_makes:
-            stmt = stmt.where(func.lower(Listing.maker).not_like(like(item)))
-        for item in filters.exclude_models:
-            stmt = stmt.where(func.lower(Listing.model).not_like(like(item)))
-        for item in filters.exclude_colors:
-            stmt = stmt.where(func.lower(func.coalesce(Listing.color, "")).not_like(like(item)))
+    cards = [_card(row) for row in rows]
+    return _paginate(cards, page=page, page_size=page_size)
 
-        if filters.min_year is not None:
-            stmt = stmt.where(Listing.year.is_not(None)).where(Listing.year >= filters.min_year)
-        if filters.max_year is not None:
-            stmt = stmt.where(Listing.year.is_not(None)).where(Listing.year <= filters.max_year)
 
-        preload_limit = max(limit * 8, 200)
-        rows = session.scalars(stmt.order_by(Listing.last_seen_at.desc(), Listing.id.desc()).limit(preload_limit)).all()
+def is_favorite(*, user_id: int, source: str, external_id: str) -> bool:
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(Favorite.id)
+            .where(Favorite.user_id == user_id)
+            .where(Favorite.source == source)
+            .where(Favorite.external_id == external_id)
+        )
+    return row is not None
 
-    cards: list[ListingCard] = []
-    for row in rows:
-        card = _card_from_row(row)
 
-        if filters.max_price_rub is not None and (card.effective_price_rub is None or card.effective_price_rub > filters.max_price_rub):
-            continue
-        if filters.min_price_rub is not None and (card.effective_price_rub is None or card.effective_price_rub < filters.min_price_rub):
-            continue
+def toggle_favorite(*, user_id: int, source: str, external_id: str) -> bool:
+    with SessionLocal() as session:
+        existing = session.scalar(
+            select(Favorite)
+            .where(Favorite.user_id == user_id)
+            .where(Favorite.source == source)
+            .where(Favorite.external_id == external_id)
+        )
+        if existing is not None:
+            session.delete(existing)
+            session.commit()
+            return False
 
-        cards.append(card)
-        if len(cards) >= limit:
-            break
-
-    return cards
+        session.add(Favorite(user_id=user_id, source=source, external_id=external_id))
+        session.commit()
+        return True
 
 
 def enqueue_scrape_request(query_text: str) -> bool:
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(seconds=SETTINGS.scrape_trigger_debounce_seconds)
+    clean_query = _normalize_text(query_text)
 
     with SessionLocal() as session:
         existing = (
             session.scalar(
                 select(func.count())
                 .select_from(ScrapeRequest)
+                .where(ScrapeRequest.source == "carsensor")
                 .where(ScrapeRequest.status == "pending")
                 .where(ScrapeRequest.requested_at >= threshold)
-                .where(ScrapeRequest.query_text == query_text)
+                .where(ScrapeRequest.query_text == clean_query)
             )
             or 0
         )
-
         if existing > 0:
             return False
 
@@ -136,7 +244,7 @@ def enqueue_scrape_request(query_text: str) -> bool:
             ScrapeRequest(
                 source="carsensor",
                 requested_by="telegram_bot",
-                query_text=query_text,
+                query_text=clean_query,
                 status="pending",
             )
         )

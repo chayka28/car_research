@@ -37,6 +37,8 @@ from app.scraper.translator import translate_color, translate_make, translate_mo
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 SENTINEL_PRICE_MAX = 2_147_483_647
+INVALID_PRICE_JPY_VALUES = {99_999_999, 999_999_999}
+PRICE_NOT_SPECIFIED_JPY_THRESHOLD = 90_000_000
 
 
 @dataclass
@@ -133,15 +135,22 @@ def _normalize_existing_translations() -> int:
 
 def _sanitize_legacy_prices() -> int:
     updated = 0
+    rub_placeholder_threshold = int(round(PRICE_NOT_SPECIFIED_JPY_THRESHOLD * JPY_TO_RUB_RATE))
 
     def normalize_jpy(value: int | None) -> int | None:
         if value is None:
             return None
-        if value >= SENTINEL_PRICE_MAX or value <= 0:
+        if value <= 0:
+            return None
+        if value >= SENTINEL_PRICE_MAX:
+            return None
+        if value in INVALID_PRICE_JPY_VALUES:
             return None
         if value < 10_000:
             # Carsensor prices are in "man yen": value * 10_000.
-            return value * 10_000
+            value *= 10_000
+        if value >= PRICE_NOT_SPECIFIED_JPY_THRESHOLD:
+            return None
         return value
 
     with SessionLocal() as session:
@@ -172,6 +181,15 @@ def _sanitize_legacy_prices() -> int:
             normalized_total_price_rub = (
                 int(round(row.total_price_jpy * JPY_TO_RUB_RATE)) if row.total_price_jpy is not None else None
             )
+
+            if normalized_price_rub is not None and not (0 < normalized_price_rub < SENTINEL_PRICE_MAX):
+                normalized_price_rub = None
+            if normalized_total_price_rub is not None and not (0 < normalized_total_price_rub < SENTINEL_PRICE_MAX):
+                normalized_total_price_rub = None
+            if normalized_price_rub is not None and normalized_price_rub >= rub_placeholder_threshold:
+                normalized_price_rub = None
+            if normalized_total_price_rub is not None and normalized_total_price_rub >= rub_placeholder_threshold:
+                normalized_total_price_rub = None
 
             if normalized_price_rub != row.price_rub:
                 row.price_rub = normalized_price_rub

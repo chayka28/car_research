@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import re
 from typing import Any
@@ -15,44 +15,32 @@ _TOOL_SCHEMA = {
     "type": "function",
     "function": {
         "name": "extract_car_filters",
-        "description": "Extract structured filters for searching car listings in PostgreSQL.",
+        "description": "Extract car filters from user text for PostgreSQL search.",
         "parameters": {
             "type": "object",
             "properties": {
-                "include_makes": {"type": "array", "items": {"type": "string"}},
-                "exclude_makes": {"type": "array", "items": {"type": "string"}},
-                "include_models": {"type": "array", "items": {"type": "string"}},
-                "exclude_models": {"type": "array", "items": {"type": "string"}},
-                "include_colors": {"type": "array", "items": {"type": "string"}},
+                "make": {"type": ["string", "null"]},
+                "model": {"type": ["string", "null"]},
+                "color": {"type": ["string", "null"]},
                 "exclude_colors": {"type": "array", "items": {"type": "string"}},
-                "max_price_rub": {"type": ["integer", "null"]},
-                "min_price_rub": {"type": ["integer", "null"]},
-                "min_year": {"type": ["integer", "null"]},
-                "max_year": {"type": ["integer", "null"]},
-                "only_active": {"type": "boolean"},
+                "year_min": {"type": ["integer", "null"]},
+                "year_max": {"type": ["integer", "null"]},
+                "price_min_rub": {"type": ["integer", "null"]},
+                "price_max_rub": {"type": ["integer", "null"]},
+                "sort": {"type": "string", "enum": ["newest", "price_asc", "price_desc"]},
             },
         },
     },
 }
 
 _SYSTEM_PROMPT = (
-    "You extract car search filters from user text. "
-    "Output only via function call. "
-    "Normalize makes/models/colors to English because DB values are in English. "
-    "For money, return integer RUB in max_price_rub/min_price_rub. "
-    "Examples: 'до 2 миллионов' => 2000000, '10 лямчиков' => 10000000. "
-    "If user says 'not red', put it into exclude_colors. "
-    "Default only_active=true."
+    "Extract car search filters from a user query. "
+    "Return only function arguments. "
+    "Normalize make and color to English. "
+    "Money values must be integer RUB. "
+    "If unknown, return null. "
+    "Sort: newest | price_asc | price_desc."
 )
-
-
-_MILLION_HINT_RE = re.compile(r"(\d+(?:[\.,]\d+)?)\s*(млн|мил|миллион|лям|лямчик|million|m)", re.IGNORECASE)
-_NUMBER_HINT_RE = re.compile(r"до\s*(\d{2,9})", re.IGNORECASE)
-_PRICE_RANGE_RE = re.compile(
-    r"(до|от)\s*([0-9][0-9\s]*(?:[\.,][0-9]+)?)\s*(млн|мил|миллион|лям|лямчик|million|m)?",
-    re.IGNORECASE,
-)
-_EXCLUDE_SEGMENT_RE = re.compile(r"(?:не|кроме|without|except|без|not)\s+([^.;\\n]+)", re.IGNORECASE)
 
 _MAKE_ALIASES = {
     "toyota": "Toyota",
@@ -70,21 +58,33 @@ _MAKE_ALIASES = {
     "suzuki": "Suzuki",
     "сузуки": "Suzuki",
     "daihatsu": "Daihatsu",
+    "daihatsu": "Daihatsu",
     "lexus": "Lexus",
     "лексус": "Lexus",
     "bmw": "BMW",
+    "бмв": "BMW",
+    "бэха": "BMW",
+    "беха": "BMW",
+    "бэха": "BMW",
+    "бэху": "BMW",
     "mercedes": "Mercedes-Benz",
+    "mercedes-benz": "Mercedes-Benz",
     "мерседес": "Mercedes-Benz",
     "audi": "Audi",
+    "фиат": "Fiat",
     "fiat": "Fiat",
     "tesla": "Tesla",
+    "тесла": "Tesla",
+    "volkswagen": "Volkswagen",
+    "vw": "Volkswagen",
+    "фольксваген": "Volkswagen",
 }
 
 _COLOR_ALIASES = {
-    "white": "White",
-    "бел": "White",
     "black": "Black",
     "черн": "Black",
+    "white": "White",
+    "бел": "White",
     "red": "Red",
     "красн": "Red",
     "blue": "Blue",
@@ -94,165 +94,206 @@ _COLOR_ALIASES = {
     "сер": "Gray",
     "silver": "Silver",
     "сереб": "Silver",
-    "green": "Green",
-    "зелен": "Green",
     "yellow": "Yellow",
     "желт": "Yellow",
-    "beige": "Beige",
-    "беж": "Beige",
-    "brown": "Brown",
-    "корич": "Brown",
+    "green": "Green",
+    "зелен": "Green",
     "orange": "Orange",
     "оранж": "Orange",
+    "brown": "Brown",
+    "корич": "Brown",
+    "beige": "Beige",
+    "беж": "Beige",
 }
 
+_PRICE_RANGE_RE = re.compile(
+    r"(до|от)\s*([0-9][0-9\s]*(?:[.,][0-9]+)?)\s*(млн|мил|миллион|лям|лямчик|million|m|тыс|k|к)?",
+    re.IGNORECASE,
+)
+_GENERIC_BUDGET_RE = re.compile(
+    r"([0-9][0-9\s]*(?:[.,][0-9]+)?)\s*(млн|мил|миллион|лям|лямчик|million|m|тыс|k|к)",
+    re.IGNORECASE,
+)
+_YEAR_PLUS_RE = re.compile(r"\b(19\d{2}|20\d{2})\s*\+", re.IGNORECASE)
+_YEAR_RANGE_RE = re.compile(r"\b(19\d{2}|20\d{2})\s*[-–]\s*(19\d{2}|20\d{2})\b")
+_YEAR_MAX_RE = re.compile(r"(?:до|не старше)\s*(19\d{2}|20\d{2})", re.IGNORECASE)
+_YEAR_MIN_RE = re.compile(r"(?:от|с)\s*(19\d{2}|20\d{2})", re.IGNORECASE)
+_EXCLUDE_SEGMENT_RE = re.compile(
+    r"(?:^|[\s,.;:!?()\-])(?:не|кроме|без|not|except|without)\s+([^.;\n]+)",
+    re.IGNORECASE,
+)
 
-def _to_clean_list(value: Any) -> list[str]:
+
+def _normalize_make(value: str | None) -> str | None:
+    if value is None:
+        return None
+    source = value.strip().lower()
+    if not source:
+        return None
+    for key, normalized in _MAKE_ALIASES.items():
+        if key in source:
+            return normalized
+    return value.strip().title()
+
+
+def _normalize_color(value: str | None) -> str | None:
+    if value is None:
+        return None
+    source = value.strip().lower()
+    if not source:
+        return None
+    for key, normalized in _COLOR_ALIASES.items():
+        if key in source:
+            return normalized
+    return value.strip().title()
+
+
+def _normalize_color_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     out: list[str] = []
     for item in value:
         if not isinstance(item, str):
             continue
-        cleaned = item.strip()
-        if cleaned:
-            out.append(cleaned)
+        normalized = _normalize_color(item)
+        if normalized and normalized not in out:
+            out.append(normalized)
     return out
 
 
 def _to_opt_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
+    if value is None or isinstance(value, bool):
         return None
     if isinstance(value, int):
         return value
     if isinstance(value, float):
         return int(round(value))
     if isinstance(value, str):
-        candidate = value.strip().replace(" ", "")
-        if not candidate:
+        text = value.replace(" ", "").replace(",", ".").strip()
+        if not text:
             return None
-        candidate = candidate.replace(",", ".")
         try:
-            return int(round(float(candidate)))
+            return int(round(float(text)))
         except ValueError:
             return None
     return None
 
 
-def _naive_budget_fallback(text: str) -> int | None:
-    million_match = _MILLION_HINT_RE.search(text)
-    if million_match:
-        try:
-            return int(round(float(million_match.group(1).replace(",", ".")) * 1_000_000))
-        except ValueError:
-            return None
-
-    number_match = _NUMBER_HINT_RE.search(text)
-    if number_match:
-        try:
-            return int(number_match.group(1))
-        except ValueError:
-            return None
-
-    return None
-
-
-def _parse_price_value(raw_number: str, unit: str | None) -> int | None:
-    normalized = raw_number.replace(" ", "").replace(",", ".")
+def _parse_amount(number_text: str, unit: str | None) -> int | None:
+    normalized = number_text.replace(" ", "").replace(",", ".")
     try:
         value = float(normalized)
     except ValueError:
         return None
 
-    if unit:
+    if unit is None:
+        if value < 10_000:
+            return None
+        return int(round(value))
+
+    unit_l = unit.lower()
+    if unit_l in {"млн", "мил", "миллион", "лям", "лямчик", "million", "m"}:
         return int(round(value * 1_000_000))
+    if unit_l in {"тыс", "k", "к"}:
+        return int(round(value * 1_000))
     return int(round(value))
 
 
-def _extract_naive_filters(user_text: str) -> dict[str, Any]:
-    text_lower = user_text.lower()
+def _fallback_parse(text: str) -> SearchFilters:
+    source = text.lower()
+    filters = SearchFilters()
 
-    include_makes: set[str] = set()
-    exclude_makes: set[str] = set()
-    include_colors: set[str] = set()
-    exclude_colors: set[str] = set()
+    for key, make in _MAKE_ALIASES.items():
+        if key in source:
+            filters.make = make
+            break
 
-    max_price: int | None = None
-    min_price: int | None = None
+    includes: list[str] = []
+    for key, color in _COLOR_ALIASES.items():
+        if key in source:
+            includes.append(color)
+    if includes:
+        filters.color = includes[0]
 
-    for match in _PRICE_RANGE_RE.finditer(text_lower):
-        boundary = match.group(1).lower()
-        value = _parse_price_value(match.group(2), match.group(3))
-        if value is None:
-            continue
-        if boundary == "до":
-            max_price = value if max_price is None else min(max_price, value)
-        else:
-            min_price = value if min_price is None else max(min_price, value)
-
-    if max_price is None:
-        max_price = _naive_budget_fallback(text_lower)
-
-    exclude_fragments: list[str] = []
-    for match in _EXCLUDE_SEGMENT_RE.finditer(text_lower):
+    excludes: list[str] = []
+    for match in _EXCLUDE_SEGMENT_RE.finditer(source):
         fragment = match.group(1)
         fragment = re.split(r"\b(до|от|но)\b", fragment, maxsplit=1)[0]
-        exclude_fragments.extend(re.split(r"(?:,|/|\s+или\s+|\s+or\s+|\s+and\s+)", fragment))
+        for key, color in _COLOR_ALIASES.items():
+            if key in fragment and color not in excludes:
+                excludes.append(color)
+    if filters.color in excludes:
+        excludes = [item for item in excludes if item != filters.color]
+    filters.exclude_colors = excludes
 
-    def _match_aliases(aliases: dict[str, str], source_text: str) -> set[str]:
-        found: set[str] = set()
-        for key, normalized in aliases.items():
-            if key in source_text:
-                found.add(normalized)
-        return found
+    for match in _PRICE_RANGE_RE.finditer(source):
+        boundary = match.group(1).lower()
+        amount = _parse_amount(match.group(2), match.group(3))
+        if amount is None:
+            continue
+        if boundary == "до":
+            filters.price_max_rub = amount if filters.price_max_rub is None else min(filters.price_max_rub, amount)
+        else:
+            filters.price_min_rub = amount if filters.price_min_rub is None else max(filters.price_min_rub, amount)
 
-    include_makes |= _match_aliases(_MAKE_ALIASES, text_lower)
-    include_colors |= _match_aliases(_COLOR_ALIASES, text_lower)
+    if filters.price_max_rub is None and filters.price_min_rub is None:
+        generic = _GENERIC_BUDGET_RE.search(source)
+        if generic:
+            amount = _parse_amount(generic.group(1), generic.group(2))
+            if amount is not None:
+                filters.price_max_rub = amount
 
-    exclude_text = " ".join(exclude_fragments)
-    exclude_makes |= _match_aliases(_MAKE_ALIASES, exclude_text)
-    exclude_colors |= _match_aliases(_COLOR_ALIASES, exclude_text)
+    year_range = _YEAR_RANGE_RE.search(source)
+    if year_range:
+        filters.year_min = int(year_range.group(1))
+        filters.year_max = int(year_range.group(2))
+    else:
+        year_plus = _YEAR_PLUS_RE.search(source)
+        if year_plus:
+            filters.year_min = int(year_plus.group(1))
+        year_min = _YEAR_MIN_RE.search(source)
+        if year_min:
+            value = int(year_min.group(1))
+            if filters.year_min is None:
+                filters.year_min = value
+        year_max = _YEAR_MAX_RE.search(source)
+        if year_max:
+            value = int(year_max.group(1))
+            if filters.year_max is None:
+                filters.year_max = value
 
-    include_makes -= exclude_makes
-    include_colors -= exclude_colors
+    if "сначала деш" in source or "дешев" in source:
+        filters.sort = "price_asc"
+    elif "дорож" in source:
+        filters.sort = "price_desc"
+    else:
+        filters.sort = "newest"
 
-    return {
-        "include_makes": sorted(include_makes),
-        "exclude_makes": sorted(exclude_makes),
-        "include_colors": sorted(include_colors),
-        "exclude_colors": sorted(exclude_colors),
-        "max_price_rub": max_price,
-        "min_price_rub": min_price,
-    }
+    return filters
 
 
-def _normalize_filters(payload: dict[str, Any], user_text: str) -> SearchFilters:
-    max_price = _to_opt_int(payload.get("max_price_rub"))
-    min_price = _to_opt_int(payload.get("min_price_rub"))
-
-    if max_price is None:
-        max_price = _naive_budget_fallback(user_text)
-
-    return SearchFilters(
-        include_makes=_to_clean_list(payload.get("include_makes")),
-        exclude_makes=_to_clean_list(payload.get("exclude_makes")),
-        include_models=_to_clean_list(payload.get("include_models")),
-        exclude_models=_to_clean_list(payload.get("exclude_models")),
-        include_colors=_to_clean_list(payload.get("include_colors")),
-        exclude_colors=_to_clean_list(payload.get("exclude_colors")),
-        max_price_rub=max_price,
-        min_price_rub=min_price,
-        min_year=_to_opt_int(payload.get("min_year")),
-        max_year=_to_opt_int(payload.get("max_year")),
-        only_active=bool(payload.get("only_active", True)),
+def _normalize_payload(payload: dict[str, Any], fallback_text: str) -> SearchFilters:
+    filters = SearchFilters(
+        make=_normalize_make(payload.get("make")) if isinstance(payload.get("make"), str) else None,
+        model=payload.get("model").strip() if isinstance(payload.get("model"), str) and payload.get("model").strip() else None,
+        color=_normalize_color(payload.get("color")) if isinstance(payload.get("color"), str) else None,
+        exclude_colors=_normalize_color_list(payload.get("exclude_colors")),
+        year_min=_to_opt_int(payload.get("year_min")),
+        year_max=_to_opt_int(payload.get("year_max")),
+        price_min_rub=_to_opt_int(payload.get("price_min_rub")),
+        price_max_rub=_to_opt_int(payload.get("price_max_rub")),
+        sort=payload.get("sort") if payload.get("sort") in {"newest", "price_asc", "price_desc"} else "newest",
     )
+    if filters.is_empty():
+        return _fallback_parse(fallback_text)
+    return filters
 
 
 def extract_filters(user_text: str) -> SearchFilters:
-    client = OpenAI(api_key=SETTINGS.openai_api_key)
+    if not SETTINGS.llm_enabled or SETTINGS.openai_api_key is None:
+        return _fallback_parse(user_text)
 
+    client = OpenAI(api_key=SETTINGS.openai_api_key)
     try:
         completion = client.chat.completions.create(
             model=SETTINGS.openai_model,
@@ -264,17 +305,17 @@ def extract_filters(user_text: str) -> SearchFilters:
             tools=[_TOOL_SCHEMA],
             tool_choice={"type": "function", "function": {"name": "extract_car_filters"}},
         )
+
         message = completion.choices[0].message
         tool_calls = message.tool_calls or []
         if not tool_calls:
-            logger.warning("OpenAI response has no tool calls, falling back to naive parsing.")
-            return _normalize_filters(_extract_naive_filters(user_text), user_text)
+            logger.warning("LLM returned no tool calls; fallback parser used.")
+            return _fallback_parse(user_text)
 
-        args_text = tool_calls[0].function.arguments or "{}"
-        payload = json.loads(args_text)
+        payload = json.loads(tool_calls[0].function.arguments or "{}")
         if not isinstance(payload, dict):
             payload = {}
-        return _normalize_filters(payload, user_text)
+        return _normalize_payload(payload, user_text)
     except Exception:
-        logger.warning("Failed to extract filters via OpenAI, using fallback parser.")
-        return _normalize_filters(_extract_naive_filters(user_text), user_text)
+        logger.warning("Failed to parse filters through OpenAI; fallback parser used.")
+        return _fallback_parse(user_text)

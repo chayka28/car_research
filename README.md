@@ -66,11 +66,12 @@ docker compose logs -f worker
 - reads free-form user query;
 - extracts filters through OpenAI Function Calling;
 - searches only PostgreSQL `listings`;
-- returns cards with inline navigation;
+- returns compact cards with inline navigation and favorites;
 - requests scraper refresh if no matches found.
 
 Required env:
 - `TELEGRAM_BOT_TOKEN`
+- `LLM_PROVIDER` (`openai` or `none`)
 - `OPENAI_API_KEY` (or `LLM_API_KEY`)
 - `OPENAI_MODEL` (default: `gpt-4o-mini`)
 

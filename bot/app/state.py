@@ -1,58 +1,58 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import time
-import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from app.schemas import ListingCard
+from app.schemas import ListingCard, PagedResult, SearchFilters
 
 
 @dataclass
-class SearchSession:
-    token: str
+class UserSession:
+    user_id: int
     chat_id: int
-    query: str
-    listings: list[ListingCard]
-    current_index: int
-    created_ts: float
+    mode: str = "search"
+    query_text: str | None = None
+    filters: SearchFilters = field(default_factory=SearchFilters)
+    page: int = 1
+    page_size: int = 1
+    awaiting_input: str | None = None
+    created_ts: float = field(default_factory=time.time)
+    updated_ts: float = field(default_factory=time.time)
+    last_result: PagedResult | None = None
     photo_message_id: int | None = None
+
+    def touch(self) -> None:
+        self.updated_ts = time.time()
+
+    @property
+    def current_listing(self) -> ListingCard | None:
+        if self.last_result is None:
+            return None
+        if not self.last_result.items:
+            return None
+        return self.last_result.items[0]
 
 
 class SessionStore:
     def __init__(self, ttl_seconds: int) -> None:
         self._ttl_seconds = ttl_seconds
-        self._sessions: dict[str, SearchSession] = {}
+        self._sessions: dict[int, UserSession] = {}
 
     def _cleanup(self) -> None:
         now = time.time()
-        expired = [token for token, session in self._sessions.items() if now - session.created_ts > self._ttl_seconds]
-        for token in expired:
-            self._sessions.pop(token, None)
+        expired = [user_id for user_id, item in self._sessions.items() if now - item.updated_ts > self._ttl_seconds]
+        for user_id in expired:
+            self._sessions.pop(user_id, None)
 
-    def create(self, chat_id: int, query: str, listings: list[ListingCard]) -> SearchSession:
+    def get_or_create(self, *, user_id: int, chat_id: int) -> UserSession:
         self._cleanup()
-        token = uuid.uuid4().hex[:12]
-        session = SearchSession(
-            token=token,
-            chat_id=chat_id,
-            query=query,
-            listings=listings,
-            current_index=0,
-            created_ts=time.time(),
-        )
-        self._sessions[token] = session
-        return session
-
-    def get(self, token: str) -> SearchSession | None:
-        self._cleanup()
-        return self._sessions.get(token)
-
-    def set_index(self, token: str, index: int) -> SearchSession | None:
-        session = self.get(token)
+        session = self._sessions.get(user_id)
         if session is None:
-            return None
-        bounded = max(0, min(index, len(session.listings) - 1))
-        session.current_index = bounded
+            session = UserSession(user_id=user_id, chat_id=chat_id)
+            self._sessions[user_id] = session
+        else:
+            session.chat_id = chat_id
+            session.touch()
         return session
 
 

@@ -1,4 +1,4 @@
-﻿import os
+import os
 from dataclasses import dataclass
 
 
@@ -9,11 +9,18 @@ def _env(name: str, default: str | None = None) -> str:
     return value
 
 
-def _required_secret(*names: str) -> str:
+def _optional_secret(*names: str) -> str | None:
     for name in names:
         value = os.getenv(name)
         if value and value.strip() and value.strip().lower() != "change_me":
             return value.strip()
+    return None
+
+
+def _required_secret(*names: str) -> str:
+    value = _optional_secret(*names)
+    if value is not None:
+        return value
     joined = ", ".join(names)
     raise RuntimeError(f"Missing required secret env var. Set one of: {joined}")
 
@@ -21,16 +28,19 @@ def _required_secret(*names: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
-    openai_api_key: str
+    llm_provider: str
+    openai_api_key: str | None
     openai_model: str
     database_url: str
-
     jpy_to_rub_rate: float
     bot_results_limit: int
     bot_session_ttl_seconds: int
     photo_timeout_seconds: float
     scrape_trigger_debounce_seconds: int
 
+    @property
+    def llm_enabled(self) -> bool:
+        return self.llm_provider != "none"
 
 
 def build_database_url() -> str:
@@ -42,9 +52,17 @@ def build_database_url() -> str:
     return f"postgresql+psycopg2://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
 
 
+_llm_provider = _env("LLM_PROVIDER", "openai").strip().lower()
+_openai_key = _optional_secret("OPENAI_API_KEY", "LLM_API_KEY")
+if _llm_provider == "openai" and _openai_key is None:
+    # Keep bot functional with fallback parser even without OpenAI key.
+    _llm_provider = "none"
+
+
 SETTINGS = Settings(
     telegram_bot_token=_required_secret("TELEGRAM_BOT_TOKEN"),
-    openai_api_key=_required_secret("OPENAI_API_KEY", "LLM_API_KEY"),
+    llm_provider=_llm_provider,
+    openai_api_key=_openai_key,
     openai_model=_env("OPENAI_MODEL", "gpt-4o-mini"),
     database_url=build_database_url(),
     jpy_to_rub_rate=float(_env("JPY_TO_RUB_RATE", "0.62")),
