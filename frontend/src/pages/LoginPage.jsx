@@ -48,9 +48,11 @@ export default function LoginPage() {
   return (
     <main className="page page-login">
       <section className="auth-shell fade-up">
-        <p className="kicker">Car Research Админ-панель</p>
-        <h1>С возвращением</h1>
-        <p className="auth-subtitle">Войдите в систему, чтобы открыть защищенный список автомобилей.</p>
+        <p className="kicker">CAR RESEARCH ADMIN</p>
+        <h1>Вход в систему</h1>
+        <p className="auth-subtitle">
+          Авторизуйтесь, чтобы открыть защищённую панель управления объявлениями.
+        </p>
 
         <form className="auth-form" onSubmit={onSubmit}>
           <label>
@@ -81,7 +83,7 @@ export default function LoginPage() {
           {error ? <p className="form-error">{error}</p> : null}
 
           <button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? "Входим..." : "Войти"}
+            {isSubmitting ? "Выполняем вход..." : "Войти"}
           </button>
         </form>
       </section>

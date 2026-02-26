@@ -13,6 +13,10 @@ function translateErrorDetail(detail) {
     return "Токен недействителен. Выполните вход повторно.";
   }
 
+  if (detail === "Listing not found") {
+    return "Запись не найдена.";
+  }
+
   return detail;
 }
 
@@ -45,6 +49,45 @@ export async function login({ username, password }) {
   }
 
   return response.json();
+}
+
+export async function getListings(token, params = {}) {
+  const searchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    searchParams.set(key, String(value));
+  }
+
+  const queryString = searchParams.toString();
+  const path = queryString ? `/api/listings?${queryString}` : "/api/listings";
+
+  const response = await fetch(buildUrl(path), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response);
+  }
+
+  return response.json();
+}
+
+export async function deleteListing(token, listingId) {
+  const response = await fetch(buildUrl(`/api/listings/${listingId}`), {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response);
+  }
 }
 
 export async function getCars(token) {

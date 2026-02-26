@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import DATABASE_URL
 from app.db.base import Base
-from app.models import car, user  # noqa: F401
+from app.models import car, listing, user  # noqa: F401
 
 config = context.config
 

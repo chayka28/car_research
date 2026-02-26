@@ -1,137 +1,70 @@
 # car_research
-Сервис для поиска объявлений по продаже автомобилей 
 
-## Smoke test (Day 1 Step 6)
+Service for collecting car listings from Carsensor, exposing them in admin API/UI, and storing data in PostgreSQL.
 
-### 1) Prepare environment
+## Stack
+- `backend`: FastAPI + JWT auth + SQLAlchemy + Alembic
+- `frontend`: SPA admin panel
+- `worker`: Carsensor scraper (sitemaps -> detail pages -> PostgreSQL upsert)
+- `db`: PostgreSQL 16
 
+## Quick start
+1. Prepare env:
 ```powershell
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
-docker compose up -d --build db backend
 ```
-
-Wait until API is healthy:
-
+2. Build and run:
 ```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/health"
+docker compose up -d --build
 ```
+3. Open:
+- frontend: `http://localhost:8080`
+- backend health: `http://localhost:8000/health`
 
-Expected result:
+## Default admin credentials
+- username: `admin`
+- password: `admin123`
 
-```json
-{"status":"ok"}
-```
+## API
+- `POST /api/login` -> returns JWT (`access_token`)
+- `GET /api/cars` -> JWT-protected list of cars
 
-### 2) Automatic smoke check
-
-Run the script:
-
+## Worker (Carsensor scraper)
+Run one cycle manually:
 ```powershell
-./scripts/smoke_day1_step6.ps1
+docker compose run --rm -e WORKER_RUN_ONCE=1 worker
 ```
 
-Expected outcome:
-- process exit code is `0`
-- output ends with: `Smoke test passed: login and JWT-protected /api/cars work as expected.`
-
-### 3) Manual smoke check
-
-Login and get JWT token:
-
+Follow logs:
 ```powershell
-$loginBody = @{ username = "admin"; password = "admin123" } | ConvertTo-Json
-$login = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/login" -ContentType "application/json" -Body $loginBody
-$token = $login.access_token
-$login
+docker compose logs -f worker
 ```
 
-Expected:
-- HTTP `200`
-- response contains `access_token`
-- `token_type` equals `bearer`
+### Worker pipeline
+1. Reads sitemap chain from Carsensor (`robots.txt` -> `usedcar-detail-index.xml` -> `usedcar-detail-*.xml`).
+2. Builds candidate pool from detail listing URLs.
+3. Selects final set with per-make diversity (`PER_MAKE_LIMIT`).
+4. Scrapes detail pages with retry/backoff.
+5. Parses required fields: make, model, year, price, color, url, external_id.
+6. Converts prices JPY -> RUB (`JPY_TO_RUB_RATE`).
+7. Batch upserts into `listings` by `(source, external_id)`.
+8. Marks stale rows inactive based on `INACTIVE_AFTER_DAYS`.
 
-Negative case (no token):
+### Key env for worker
+- `MAX_SITEMAPS`
+- `POOL_SIZE`
+- `MAX_LISTINGS`
+- `PER_MAKE_LIMIT`
+- `CONCURRENCY`
+- `BATCH_PAUSE`
+- `JPY_TO_RUB_RATE`
+- `INACTIVE_AFTER_DAYS`
+- `DELETE_AFTER_DAYS`
 
+## Migrations
+Backend applies Alembic automatically at container startup.
+
+Manual migration:
 ```powershell
-Invoke-WebRequest -Method Get -Uri "http://localhost:8000/api/cars"
+docker compose run --rm backend alembic upgrade head
 ```
-
-Expected:
-- HTTP `401 Unauthorized`
-
-Positive case (with token):
-
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/api/cars" -Headers @{ Authorization = "Bearer $token" }
-```
-
-Expected:
-- HTTP `200`
-- JSON array with at least one object
-- each object includes `brand`, `model`, `year`, `price`, `color`, `link`
-
-### 4) Troubleshooting
-
-- Backend is unavailable:
-  - verify containers: `docker compose ps`
-  - check backend logs: `docker compose logs backend --tail=200`
-- Invalid credentials:
-  - verify `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env`
-  - restart backend after env changes: `docker compose up -d --build backend`
-- Empty cars response:
-  - check DB/backend logs
-  - ensure initial seeding ran during backend startup
-
-## Admin frontend
-
-Запуск через Docker Compose (backend + frontend):
-
-```powershell
-docker compose up -d --build db backend frontend
-```
-
-Открыть: `http://localhost:8080`.
-
-Локальный режим разработки frontend:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-Открыть: `http://localhost:5173`.
-
-Поток авторизации:
-- `/login` -> `POST /api/login`
-- `/` (защищенный) -> `GET /api/cars` с JWT в `Authorization: Bearer ...`
-
-## Day 2 additions: Alembic + Worker
-
-### Alembic migrations
-Backend now runs migrations automatically on startup.
-
-Manual commands (inside `backend/`):
-
-```powershell
-alembic upgrade head
-```
-
-Migration files:
-- `backend/alembic/`
-- `backend/alembic/versions/20260225_0001_create_users_and_cars.py`
-
-### Worker (carsensor ingestion)
-Worker is now part of docker compose and runs periodically.
-
-Run full stack:
-
-```powershell
-docker compose up -d --build db backend frontend worker
-```
-
-Worker behavior:
-- fetches from `CARSENSOR_API_URL`
-- retries network failures with exponential backoff
-- normalizes required fields
-- performs PostgreSQL upsert by unique `link`
