@@ -8,9 +8,9 @@ SortType = Literal["newest", "price_asc", "price_desc"]
 
 @dataclass
 class SearchFilters:
-    make: str | None = None
-    model: str | None = None
-    color: str | None = None
+    makes: list[str] = field(default_factory=list)
+    models: list[str] = field(default_factory=list)
+    colors: list[str] = field(default_factory=list)
     exclude_colors: list[str] = field(default_factory=list)
     year_min: int | None = None
     year_max: int | None = None
@@ -21,9 +21,9 @@ class SearchFilters:
 
     def is_empty(self) -> bool:
         return (
-            self.make is None
-            and self.model is None
-            and self.color is None
+            not self.makes
+            and not self.models
+            and not self.colors
             and not self.exclude_colors
             and self.year_min is None
             and self.year_max is None
@@ -32,9 +32,9 @@ class SearchFilters:
         )
 
     def clear(self) -> None:
-        self.make = None
-        self.model = None
-        self.color = None
+        self.makes = []
+        self.models = []
+        self.colors = []
         self.exclude_colors = []
         self.year_min = None
         self.year_max = None

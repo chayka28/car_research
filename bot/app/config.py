@@ -37,6 +37,7 @@ class Settings:
     bot_session_ttl_seconds: int
     photo_timeout_seconds: float
     scrape_trigger_debounce_seconds: int
+    bot_max_pending_scrape_requests: int
 
     @property
     def llm_enabled(self) -> bool:
@@ -70,4 +71,5 @@ SETTINGS = Settings(
     bot_session_ttl_seconds=int(_env("BOT_SESSION_TTL_SECONDS", "1800")),
     photo_timeout_seconds=float(_env("BOT_PHOTO_TIMEOUT_SECONDS", "10")),
     scrape_trigger_debounce_seconds=int(_env("BOT_SCRAPE_TRIGGER_DEBOUNCE_SECONDS", "120")),
+    bot_max_pending_scrape_requests=int(_env("BOT_MAX_PENDING_SCRAPE_REQUESTS", "50")),
 )

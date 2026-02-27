@@ -74,6 +74,7 @@ Required env:
 - `LLM_PROVIDER` (`openai` or `none`)
 - `OPENAI_API_KEY` (or `LLM_API_KEY`)
 - `OPENAI_MODEL` (default: `gpt-4o-mini`)
+- `BOT_MAX_PENDING_SCRAPE_REQUESTS` (safety cap for pending scraper tasks)
 
 Logs:
 ```powershell

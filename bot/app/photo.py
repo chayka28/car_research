@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 import time
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -51,3 +51,10 @@ def resolve_listing_photo(listing_url: str) -> str | None:
 
     _photo_cache[listing_url] = (now, photo_url)
     return photo_url
+
+
+def with_cache_bust(photo_url: str, cache_key: str) -> str:
+    parts = urlsplit(photo_url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["v"] = cache_key
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))

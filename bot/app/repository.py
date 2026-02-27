@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
-from sqlalchemy import and_, case, desc, func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.config import SETTINGS
 from app.db import SessionLocal
 from app.models import Favorite, Listing, ScrapeRequest
 from app.schemas import ListingCard, PagedResult, SearchFilters
 
+logger = logging.getLogger(__name__)
+
 SENTINEL_PRICE_MAX = 2_147_483_647
 PLACEHOLDER_PRICE_VALUES = {999_999_999, 99_999_999, 69_999_999, 619_999_999}
 MAX_REASONABLE_PRICE_RUB = 80_000_000
+
+
+class EnqueueResult(NamedTuple):
+    triggered: bool
+    reason: str
 
 
 def _normalize_text(value: str | None) -> str | None:
@@ -80,12 +89,16 @@ def _base_listing_stmt(filters: SearchFilters, query_text: str | None = None):
     if filters.only_active:
         stmt = stmt.where(Listing.is_active.is_(True))
 
-    if filters.make:
-        stmt = stmt.where(func.lower(Listing.maker).like(_norm_like(filters.make)))
-    if filters.model:
-        stmt = stmt.where(func.lower(Listing.model).like(_norm_like(filters.model)))
-    if filters.color:
-        stmt = stmt.where(func.lower(func.coalesce(Listing.color, "")).like(_norm_like(filters.color)))
+    if filters.makes:
+        stmt = stmt.where(or_(*[func.lower(Listing.maker).like(_norm_like(item)) for item in filters.makes]))
+
+    if filters.models:
+        stmt = stmt.where(or_(*[func.lower(Listing.model).like(_norm_like(item)) for item in filters.models]))
+
+    if filters.colors:
+        stmt = stmt.where(
+            or_(*[func.lower(func.coalesce(Listing.color, "")).like(_norm_like(item)) for item in filters.colors])
+        )
 
     for item in filters.exclude_colors:
         stmt = stmt.where(func.lower(func.coalesce(Listing.color, "")).not_like(_norm_like(item)))
@@ -95,7 +108,7 @@ def _base_listing_stmt(filters: SearchFilters, query_text: str | None = None):
     if filters.year_max is not None:
         stmt = stmt.where(Listing.year.is_not(None)).where(Listing.year <= filters.year_max)
 
-    if query_text:
+    if query_text and filters.is_empty():
         term = _norm_like(query_text)
         stmt = stmt.where(
             or_(
@@ -115,17 +128,7 @@ def _ordered_rows(
     query_text: str | None,
 ) -> list[Listing]:
     stmt = _base_listing_stmt(filters, query_text=query_text)
-    if filters.sort == "price_asc":
-        stmt = stmt.order_by(Listing.total_price_rub.asc().nullslast(), Listing.price_rub.asc().nullslast(), Listing.id.asc())
-    elif filters.sort == "price_desc":
-        stmt = stmt.order_by(
-            Listing.total_price_rub.desc().nullslast(),
-            Listing.price_rub.desc().nullslast(),
-            Listing.id.desc(),
-        )
-    else:
-        stmt = stmt.order_by(Listing.last_seen_at.desc(), Listing.id.desc())
-
+    stmt = stmt.order_by(Listing.last_seen_at.desc(), Listing.id.desc())
     with SessionLocal() as session:
         rows = session.scalars(stmt.limit(5000)).all()
     return rows
@@ -161,12 +164,29 @@ def search_cars(
                 continue
         filtered_cards.append(item)
 
+    if filters.sort == "price_asc":
+        filtered_cards.sort(key=lambda item: (item.price_rub is None, item.price_rub or 0, item.id))
+    elif filters.sort == "price_desc":
+        filtered_cards.sort(key=lambda item: (item.price_rub is None, -(item.price_rub or 0), -item.id))
+    else:
+        filtered_cards.sort(key=lambda item: (item.last_seen_at or datetime.min, item.id), reverse=True)
+
     return _paginate(filtered_cards, page=page, page_size=page_size)
 
 
 def recent_cars(*, page: int, page_size: int) -> PagedResult:
-    filters = SearchFilters(sort="newest", only_active=True)
-    return search_cars(filters=filters, page=page, page_size=page_size)
+    with SessionLocal() as session:
+        stmt = (
+            select(Listing)
+            .where(Listing.source == "carsensor")
+            .where(Listing.deleted_at.is_(None))
+            .where(Listing.is_active.is_(True))
+            .order_by(Listing.id.desc())
+            .limit(50)
+        )
+        rows = session.scalars(stmt).all()
+    cards = [_card(row) for row in rows]
+    return _paginate(cards, page=page, page_size=page_size)
 
 
 def favorite_cars(*, user_id: int, page: int, page_size: int) -> PagedResult:
@@ -220,33 +240,49 @@ def toggle_favorite(*, user_id: int, source: str, external_id: str) -> bool:
         return True
 
 
-def enqueue_scrape_request(query_text: str) -> bool:
+def enqueue_scrape_request(query_text: str) -> EnqueueResult:
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(seconds=SETTINGS.scrape_trigger_debounce_seconds)
     clean_query = _normalize_text(query_text)
 
-    with SessionLocal() as session:
-        existing = (
-            session.scalar(
-                select(func.count())
-                .select_from(ScrapeRequest)
-                .where(ScrapeRequest.source == "carsensor")
-                .where(ScrapeRequest.status == "pending")
-                .where(ScrapeRequest.requested_at >= threshold)
-                .where(ScrapeRequest.query_text == clean_query)
+    try:
+        with SessionLocal() as session:
+            pending_count = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ScrapeRequest)
+                    .where(ScrapeRequest.source == "carsensor")
+                    .where(ScrapeRequest.status == "pending")
+                )
+                or 0
             )
-            or 0
-        )
-        if existing > 0:
-            return False
+            if pending_count >= SETTINGS.bot_max_pending_scrape_requests:
+                return EnqueueResult(False, "queue_full")
 
-        session.add(
-            ScrapeRequest(
-                source="carsensor",
-                requested_by="telegram_bot",
-                query_text=clean_query,
-                status="pending",
+            existing = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ScrapeRequest)
+                    .where(ScrapeRequest.source == "carsensor")
+                    .where(ScrapeRequest.status == "pending")
+                    .where(ScrapeRequest.requested_at >= threshold)
+                    .where(ScrapeRequest.query_text == clean_query)
+                )
+                or 0
             )
-        )
-        session.commit()
-        return True
+            if existing > 0:
+                return EnqueueResult(False, "duplicate")
+
+            session.add(
+                ScrapeRequest(
+                    source="carsensor",
+                    requested_by="telegram_bot",
+                    query_text=clean_query,
+                    status="pending",
+                )
+            )
+            session.commit()
+            return EnqueueResult(True, "queued")
+    except Exception:
+        logger.exception("Failed to enqueue scrape request")
+        return EnqueueResult(False, "error")
