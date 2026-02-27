@@ -51,7 +51,7 @@ export default function LoginPage() {
         <p className="kicker">CAR RESEARCH ADMIN</p>
         <h1>Вход в систему</h1>
         <p className="auth-subtitle">
-          Авторизуйтесь, чтобы открыть защищённую панель управления объявлениями.
+          Авторизуйтесь, чтобы открыть панель управления объявлениями.
         </p>
 
         <form className="auth-form" onSubmit={onSubmit}>

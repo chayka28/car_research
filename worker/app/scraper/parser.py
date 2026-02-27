@@ -371,7 +371,11 @@ def parse_listing_html(
         total_price_jpy = None
 
     if price_jpy is None and total_price_jpy is None:
-        logger.info("Price not specified for %s (%s)", url, price_error or "unknown")
+        return ParseFailure(
+            error_type="missing_price",
+            message=f"Missing price ({price_error or 'unknown'})",
+            debug_snippet=html[:800],
+        )
 
     mileage_km = _parse_mileage_km(label_map.get(MILEAGE_LABEL))
 

@@ -61,23 +61,6 @@ def _touch_discovered(candidates: list[ListingCandidate]) -> int:
 
     now = datetime.now(timezone.utc)
     external_ids = [c.external_id for c in candidates]
-    placeholder_rows = [
-        {
-            "source": SOURCE_NAME,
-            "external_id": c.external_id,
-            "url": c.url,
-            "maker": "Unknown",
-            "model": "Unknown",
-            "year": None,
-            "price_jpy": None,
-            "price_rub": None,
-            "color": None,
-            "last_seen_at": now,
-            "is_active": True,
-            "deleted_at": None,
-        }
-        for c in candidates
-    ]
 
     reactivated = 0
     with SessionLocal() as session:
@@ -93,16 +76,11 @@ def _touch_discovered(candidates: list[ListingCandidate]) -> int:
                 or 0
             )
 
-        for batch in _chunked(placeholder_rows, UPSERT_BATCH_SIZE):
-            stmt = pg_insert(Listing).values(batch)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[Listing.source, Listing.external_id],
-                set_={
-                    "url": stmt.excluded.url,
-                    "last_seen_at": stmt.excluded.last_seen_at,
-                    "is_active": True,
-                    "deleted_at": None,
-                },
+            stmt = (
+                update(Listing)
+                .where(Listing.source == SOURCE_NAME)
+                .where(Listing.external_id.in_(batch))
+                .values(last_seen_at=now, is_active=True, deleted_at=None)
             )
             session.execute(stmt)
         session.commit()
