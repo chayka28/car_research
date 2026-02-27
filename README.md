@@ -35,7 +35,7 @@ docker-compose up --build
 
 (Задается через `ADMIN_USERNAME` и `ADMIN_PASSWORD` в `.env`)
 
-## API (минимум по ТЗ)
+## API
 - `POST /api/login`
   - request: `{"username":"admin","password":"admin123"}`
   - response: `{"access_token":"<jwt>", "token_type":"bearer"}`
