@@ -4,22 +4,33 @@ from html import escape
 
 from app.schemas import ListingCard, SearchFilters
 
+_UNKNOWN_VALUES = {"", "-", "unknown", "none", "null", "не указано", "n/a"}
 
-def _safe(value: object | None, default: str = "не указано") -> str:
+
+def _normalize_text(value: object | None) -> str | None:
     if value is None:
-        return default
+        return None
     text = str(value).strip()
-    return escape(text) if text else default
+    if not text:
+        return None
+    if text.lower() in _UNKNOWN_VALUES:
+        return None
+    return text
+
+
+def _safe_display(value: object | None, default: str = "—") -> str:
+    normalized = _normalize_text(value)
+    return escape(normalized) if normalized is not None else default
 
 
 def format_rub(value: int | None) -> str:
     if value is None:
-        return "price not specified"
+        return "—"
     return f"{value:,}".replace(",", " ") + " ₽"
 
 
 def _join_values(values: list[str], limit: int = 3) -> str:
-    cleaned = [item for item in values if item]
+    cleaned = [item for item in values if _normalize_text(item)]
     if not cleaned:
         return "-"
     if len(cleaned) <= limit:
@@ -28,21 +39,32 @@ def _join_values(values: list[str], limit: int = 3) -> str:
 
 
 def build_listing_card_text(*, card: ListingCard, page: int, pages: int, photo_found: bool) -> str:
-    title = f"{_safe(card.maker)} {_safe(card.model)}, {_safe(card.year)}"
+    maker = _safe_display(card.maker)
+    model = _safe_display(card.model)
+    year = _safe_display(card.year)
+    color = _safe_display(card.color)
+    external_id = _safe_display(card.external_id)
     status = "Активно" if card.is_active else "Неактивно"
-    photo_line = "" if photo_found else "\nФото: отсутствует"
-    return "\n".join(
-        [
-            f"<b>{title}</b>",
-            f"Цвет: {_safe(card.color)}",
-            f"Цена: {format_rub(card.price_rub)}",
-            f"ID: {_safe(card.external_id)}",
-            f"Статус: {status}",
-            photo_line,
-            "",
-            f"{page}/{pages}",
-        ]
-    ).replace("\n\n\n", "\n\n")
+
+    title = f"{maker} {model}".strip()
+    if title == "— —":
+        title = "Объявление"
+    title = f"{title}, {year}" if year != "—" else title
+
+    lines = [
+        f"<b>{title}</b>",
+        f"Марка: {maker}",
+        f"Модель: {model}",
+        f"Год: {year}",
+        f"Цвет: {color}",
+        f"Цена: {format_rub(card.price_rub)}",
+        f"ID: {external_id}",
+        f"Статус: {status}",
+    ]
+    if not photo_found:
+        lines.append("Фото: —")
+    lines.extend(["", f"{page}/{pages}"])
+    return "\n".join(lines)
 
 
 def build_filter_summary(filters: SearchFilters) -> str:

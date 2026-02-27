@@ -37,47 +37,39 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⭐ Избранное", callback_data=_cb("menu", "favorites")),
             ],
             [
-                InlineKeyboardButton(text="⚙️ Настройки", callback_data=_cb("menu", "settings")),
+                InlineKeyboardButton(text="🗂 Лист ожидания", callback_data=_cb("menu", "waitlist")),
                 InlineKeyboardButton(text="ℹ️ Помощь", callback_data=_cb("menu", "help")),
             ],
-            [InlineKeyboardButton(text="❌ Закрыть", callback_data=_cb("ui", "close"))],
         ]
     )
 
 
-def help_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔎 К поиску", callback_data=_cb("menu", "search")),
-                InlineKeyboardButton(text="🎛 Фильтры", callback_data=_cb("menu", "filters")),
-            ],
-            [InlineKeyboardButton(text="⬅️ В меню", callback_data=_cb("menu", "home"))],
+def help_keyboard(*, back_action: str = "home", show_back: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text="🔎 К поиску", callback_data=_cb("menu", "search")),
+            InlineKeyboardButton(text="🎛 Фильтры", callback_data=_cb("menu", "filters")),
         ]
-    )
+    ]
+    nav_row: list[InlineKeyboardButton] = []
+    if show_back:
+        nav_row.append(InlineKeyboardButton(text="⬅ Назад", callback_data=_cb("menu", back_action)))
+    nav_row.append(InlineKeyboardButton(text="🏠 Меню", callback_data=_cb("menu", "home")))
+    rows.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_keyboard(notify_enabled: bool) -> InlineKeyboardMarkup:
-    notify_text = "🔔 Уведомления: вкл" if notify_enabled else "🔕 Уведомления: выкл"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=notify_text, callback_data=_cb("settings", "toggle_notify"))],
-            [InlineKeyboardButton(text="⬅️ В меню", callback_data=_cb("menu", "home"))],
-        ]
-    )
-
-
-def search_screen_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎛 Настроить фильтры", callback_data=_cb("menu", "filters"))],
-            [
-                InlineKeyboardButton(text="🆕 Новые", callback_data=_cb("menu", "recent")),
-                InlineKeyboardButton(text="⬅️ В меню", callback_data=_cb("menu", "home")),
-            ],
-            [InlineKeyboardButton(text="❌ Закрыть", callback_data=_cb("ui", "close"))],
-        ]
-    )
+def search_screen_keyboard(*, back_action: str = "home", show_back: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🎛 Настроить фильтры", callback_data=_cb("menu", "filters"))],
+        [InlineKeyboardButton(text="🆕 Новые", callback_data=_cb("menu", "recent"))],
+    ]
+    nav_row: list[InlineKeyboardButton] = []
+    if show_back:
+        nav_row.append(InlineKeyboardButton(text="⬅ Назад", callback_data=_cb("menu", back_action)))
+    nav_row.append(InlineKeyboardButton(text="🏠 Меню", callback_data=_cb("menu", "home")))
+    rows.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def listing_keyboard(
@@ -86,54 +78,76 @@ def listing_keyboard(
     is_favorite: bool,
     page: int,
     pages: int,
-    back_action: str = "home",
+    back_action: str,
+    show_filters: bool,
+    show_back: bool = True,
 ) -> InlineKeyboardMarkup:
     prev_callback = _cb("card", "prev") if page > 1 else _cb("card", "noop")
     next_callback = _cb("card", "next") if page < pages else _cb("card", "noop")
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔗 Открыть", url=listing_url),
-                InlineKeyboardButton(
-                    text="✅ В избранном" if is_favorite else "⭐ В избранное",
-                    callback_data=_cb("card", "favorite"),
-                ),
-            ],
-            [
-                InlineKeyboardButton(text="⬅️", callback_data=prev_callback),
-                InlineKeyboardButton(text=f"{page}/{pages}", callback_data=_cb("card", "noop")),
-                InlineKeyboardButton(text="➡️", callback_data=next_callback),
-            ],
-            [
-                InlineKeyboardButton(text="🔁 Обновить", callback_data=_cb("card", "refresh")),
-                InlineKeyboardButton(text="🎛 Фильтры", callback_data=_cb("menu", "filters")),
-            ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data=_cb("menu", back_action))],
-        ]
-    )
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text="🔗 Открыть", url=listing_url),
+            InlineKeyboardButton(
+                text="✅ В избранном" if is_favorite else "⭐ В избранное",
+                callback_data=_cb("card", "favorite"),
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️", callback_data=prev_callback),
+            InlineKeyboardButton(text=f"{page}/{pages}", callback_data=_cb("card", "noop")),
+            InlineKeyboardButton(text="➡️", callback_data=next_callback),
+        ],
+    ]
+
+    action_row = [InlineKeyboardButton(text="🔁 Обновить", callback_data=_cb("card", "refresh"))]
+    if show_filters:
+        action_row.append(InlineKeyboardButton(text="🎛 Фильтры", callback_data=_cb("menu", "filters")))
+    rows.append(action_row)
+    nav_row: list[InlineKeyboardButton] = []
+    if show_back:
+        nav_row.append(InlineKeyboardButton(text="⬅ Назад", callback_data=_cb("menu", back_action)))
+    nav_row.append(InlineKeyboardButton(text="🏠 Меню", callback_data=_cb("menu", "home")))
+    rows.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def empty_result_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔁 Проверить снова", callback_data=_cb("empty", "retry"))],
-            [InlineKeyboardButton(text="🔔 Уведомить, когда появится", callback_data=_cb("empty", "notify"))],
-            [InlineKeyboardButton(text="🎛 Изменить фильтры", callback_data=_cb("menu", "filters"))],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data=_cb("menu", "home"))],
-        ]
-    )
+def empty_result_keyboard(
+    *,
+    back_action: str,
+    show_filters: bool = True,
+    show_retry: bool = True,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🔔 Уведомить, когда появится", callback_data=_cb("empty", "notify"))],
+    ]
+    if show_retry:
+        rows.insert(0, [InlineKeyboardButton(text="🔁 Проверить снова", callback_data=_cb("empty", "retry"))])
+    if show_filters:
+        rows.append([InlineKeyboardButton(text="🎛 Изменить фильтры", callback_data=_cb("menu", "filters"))])
+    nav_row: list[InlineKeyboardButton] = []
+    if show_back:
+        nav_row.append(InlineKeyboardButton(text="⬅ Назад", callback_data=_cb("menu", back_action)))
+    nav_row.append(InlineKeyboardButton(text="🏠 Меню", callback_data=_cb("menu", "home")))
+    rows.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def awaiting_input_keyboard(back_to: str = "filters") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data=_cb("menu", back_to))],
-            [InlineKeyboardButton(text="❌ Закрыть", callback_data=_cb("ui", "close"))],
-        ]
-    )
+def awaiting_input_keyboard(*, back_to: str = "filters", show_back: bool = True) -> InlineKeyboardMarkup:
+    nav_row: list[InlineKeyboardButton] = []
+    if show_back:
+        nav_row.append(InlineKeyboardButton(text="⬅ Назад", callback_data=_cb("menu", back_to)))
+    nav_row.append(InlineKeyboardButton(text="🏠 Меню", callback_data=_cb("menu", "home")))
+    return InlineKeyboardMarkup(inline_keyboard=[nav_row])
 
 
-def filter_menu_keyboard(filters: SearchFilters) -> InlineKeyboardMarkup:
+def filter_menu_keyboard(
+    filters: SearchFilters,
+    *,
+    back_action: str = "home",
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
     year_value = f"{filters.year_min or '-'} .. {filters.year_max or '-'}"
     price_value = f"{filters.price_min_rub or '-'} .. {filters.price_max_rub or '-'} ₽"
     activity = "Да" if filters.only_active else "Нет"
@@ -149,9 +163,17 @@ def filter_menu_keyboard(filters: SearchFilters) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="✅ Применить", callback_data=_cb("filter", "apply")),
                 InlineKeyboardButton(text="♻️ Сбросить", callback_data=_cb("filter", "reset")),
             ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data=_cb("menu", "home"))],
+            _nav_row(back_action=back_action, show_back=show_back),
         ]
     )
+
+
+def _nav_row(*, back_action: str, show_back: bool) -> list[InlineKeyboardButton]:
+    row: list[InlineKeyboardButton] = []
+    if show_back:
+        row.append(InlineKeyboardButton(text="⬅ Назад", callback_data=_cb("menu", back_action)))
+    row.append(InlineKeyboardButton(text="🏠 Меню", callback_data=_cb("menu", "home")))
+    return row
 
 
 def _picker_rows(
@@ -176,75 +198,54 @@ def _picker_rows(
     return rows
 
 
-def make_picker_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
-    values = [
-        "Toyota",
-        "Nissan",
-        "Honda",
-        "Mazda",
-        "Subaru",
-        "Lexus",
-        "BMW",
-        "Mercedes-Benz",
-        "Audi",
-        "Volkswagen",
-    ]
-    rows = _picker_rows(values=values, selected=set(selected), callback_action="set_make")
+def make_picker_keyboard(*, options: list[str], selected: list[str], back_action: str = "filters") -> InlineKeyboardMarkup:
+    rows = _picker_rows(values=options, selected=set(selected), callback_action="set_make")
     rows.extend(
         [
             [InlineKeyboardButton(text="✍️ Ввести вручную", callback_data=_cb("filter", "make_manual"))],
             [InlineKeyboardButton(text="🧹 Очистить", callback_data=_cb("filter", "clear_make"))],
-            [InlineKeyboardButton(text="⬅️ Назад к фильтрам", callback_data=_cb("menu", "filters"))],
+            _nav_row(back_action=back_action, show_back=True),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def model_picker_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
-    values = [
-        "Corolla",
-        "Camry",
-        "Prius",
-        "Civic",
-        "Fit",
-        "X5",
-        "3 Series",
-        "1 Series",
-        "NX",
-        "C-Class",
-        "A4",
-        "Golf",
-    ]
-    rows = _picker_rows(values=values, selected=set(selected), callback_action="set_model")
+def model_picker_keyboard(*, options: list[str], selected: list[str], back_action: str = "filters") -> InlineKeyboardMarkup:
+    rows = _picker_rows(values=options, selected=set(selected), callback_action="set_model")
     rows.extend(
         [
             [InlineKeyboardButton(text="✍️ Ввести вручную", callback_data=_cb("filter", "model_manual"))],
             [InlineKeyboardButton(text="🧹 Очистить", callback_data=_cb("filter", "clear_model"))],
-            [InlineKeyboardButton(text="⬅️ Назад к фильтрам", callback_data=_cb("menu", "filters"))],
+            _nav_row(back_action=back_action, show_back=True),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def color_picker_keyboard(selected: list[str], excluded: list[str]) -> InlineKeyboardMarkup:
-    values = ["Black", "White", "Red", "Blue", "Gray", "Silver", "Yellow", "Green", "Other"]
+def color_picker_keyboard(
+    *,
+    options: list[str],
+    selected: list[str],
+    excluded: list[str],
+    back_action: str = "filters",
+) -> InlineKeyboardMarkup:
     selected_set = set(selected)
-    excluded_set = set(excluded)
-    rows = _picker_rows(values=values, selected=selected_set, callback_action="set_color")
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text=f"{'🚫 ' if color in excluded_set else ''}{color}",
-                callback_data=_cb("filter", "toggle_excluded_color", color),
-            )
-            for color in ("Red", "Gray", "Black")
-        ]
-    )
+    _ = excluded  # keep signature stable; exclude-color UX is disabled in favor of regular selection
+    rows = _picker_rows(values=options, selected=selected_set, callback_action="set_color")
     rows.extend(
         [
             [InlineKeyboardButton(text="🧹 Очистить", callback_data=_cb("filter", "clear_color"))],
-            [InlineKeyboardButton(text="⬅️ Назад к фильтрам", callback_data=_cb("menu", "filters"))],
+            _nav_row(back_action=back_action, show_back=True),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+def waitlist_keyboard(entries: list[str], *, back_action: str = "home", show_back: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, label in enumerate(entries, start=1):
+        rows.append([InlineKeyboardButton(text=f"🔁 {idx}. {label}", callback_data=_cb("waitlist", "run", str(idx - 1)))])
+    if entries:
+        rows.append([InlineKeyboardButton(text="🧹 Очистить лист ожидания", callback_data=_cb("waitlist", "clear"))])
+    rows.append(_nav_row(back_action=back_action, show_back=show_back))
+    return InlineKeyboardMarkup(inline_keyboard=rows)

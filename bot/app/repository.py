@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 SENTINEL_PRICE_MAX = 2_147_483_647
 PLACEHOLDER_PRICE_VALUES = {999_999_999, 99_999_999, 69_999_999, 619_999_999}
 MAX_REASONABLE_PRICE_RUB = 80_000_000
+UNKNOWN_TEXT_VALUES = {"", "-", "unknown", "none", "null", "не указано", "n/a"}
 
 
 class EnqueueResult(NamedTuple):
@@ -30,8 +32,19 @@ def _normalize_text(value: str | None) -> str | None:
     return text if text else None
 
 
+def _is_unknown_text(value: str | None) -> bool:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return True
+    return normalized.lower() in UNKNOWN_TEXT_VALUES
+
+
 def _norm_like(value: str) -> str:
     return f"%{value.strip().lower()}%"
+
+
+def _norm_eq_values(values: list[str]) -> list[str]:
+    return [item.strip().lower() for item in values if item and item.strip()]
 
 
 def _price_value_valid(value: int | None) -> bool:
@@ -82,18 +95,24 @@ def _base_listing_stmt(filters: SearchFilters, query_text: str | None = None):
         select(Listing)
         .where(Listing.source == "carsensor")
         .where(Listing.deleted_at.is_(None))
-        .where(Listing.maker != "Unknown")
-        .where(Listing.model != "Unknown")
+        .where(func.length(func.trim(func.coalesce(Listing.external_id, ""))) > 0)
+        .where(func.length(func.trim(func.coalesce(Listing.url, ""))) > 0)
+        .where(func.lower(func.trim(func.coalesce(Listing.maker, ""))) != "unknown")
+        .where(func.lower(func.trim(func.coalesce(Listing.model, ""))) != "unknown")
     )
 
     if filters.only_active:
         stmt = stmt.where(Listing.is_active.is_(True))
 
     if filters.makes:
-        stmt = stmt.where(or_(*[func.lower(Listing.maker).like(_norm_like(item)) for item in filters.makes]))
+        normalized_makes = _norm_eq_values(filters.makes)
+        if normalized_makes:
+            stmt = stmt.where(func.lower(func.trim(Listing.maker)).in_(normalized_makes))
 
     if filters.models:
-        stmt = stmt.where(or_(*[func.lower(Listing.model).like(_norm_like(item)) for item in filters.models]))
+        normalized_models = _norm_eq_values(filters.models)
+        if normalized_models:
+            stmt = stmt.where(func.lower(func.trim(Listing.model)).in_(normalized_models))
 
     if filters.colors:
         stmt = stmt.where(
@@ -122,13 +141,8 @@ def _base_listing_stmt(filters: SearchFilters, query_text: str | None = None):
     return stmt
 
 
-def _ordered_rows(
-    *,
-    filters: SearchFilters,
-    query_text: str | None,
-) -> list[Listing]:
-    stmt = _base_listing_stmt(filters, query_text=query_text)
-    stmt = stmt.order_by(Listing.last_seen_at.desc(), Listing.id.desc())
+def _ordered_rows(*, filters: SearchFilters, query_text: str | None) -> list[Listing]:
+    stmt = _base_listing_stmt(filters, query_text=query_text).order_by(Listing.last_seen_at.desc(), Listing.id.desc())
     with SessionLocal() as session:
         rows = session.scalars(stmt.limit(5000)).all()
     return rows
@@ -174,6 +188,20 @@ def search_cars(
     return _paginate(filtered_cards, page=page, page_size=page_size)
 
 
+def _recent_skip_reason(row: Listing) -> str | None:
+    if _normalize_text(row.external_id) is None:
+        return "missing_external_id"
+    if _normalize_text(row.url) is None:
+        return "missing_url"
+    if row.year is None:
+        return "missing_year"
+    if _effective_price_rub(row) is None:
+        return "missing_price"
+    if _is_unknown_text(row.maker) and _is_unknown_text(row.model):
+        return "missing_make_model"
+    return None
+
+
 def recent_cars(*, page: int, page_size: int) -> PagedResult:
     with SessionLocal() as session:
         stmt = (
@@ -182,10 +210,27 @@ def recent_cars(*, page: int, page_size: int) -> PagedResult:
             .where(Listing.deleted_at.is_(None))
             .where(Listing.is_active.is_(True))
             .order_by(Listing.id.desc())
-            .limit(50)
+            .limit(1000)
         )
         rows = session.scalars(stmt).all()
-    cards = [_card(row) for row in rows]
+
+    skipped = Counter()
+    cards: list[ListingCard] = []
+    for row in rows:
+        reason = _recent_skip_reason(row)
+        if reason is not None:
+            skipped[reason] += 1
+            continue
+        cards.append(_card(row))
+        if len(cards) >= 50:
+            break
+
+    logger.info(
+        "Recent cards selected=%s scanned=%s skipped=%s",
+        len(cards),
+        len(rows),
+        dict(skipped),
+    )
     return _paginate(cards, page=page, page_size=page_size)
 
 
@@ -208,7 +253,83 @@ def favorite_cars(*, user_id: int, page: int, page_size: int) -> PagedResult:
         rows = session.scalars(stmt).all()
 
     cards = [_card(row) for row in rows]
+    logger.info("Favorite cards user_id=%s count=%s", user_id, len(cards))
     return _paginate(cards, page=page, page_size=page_size)
+
+
+def list_filter_makes(*, only_active: bool = True, limit: int = 10) -> list[str]:
+    stmt = (
+        select(Listing.maker, func.count(Listing.id).label("cnt"))
+        .where(Listing.source == "carsensor")
+        .where(Listing.deleted_at.is_(None))
+        .where(func.length(func.trim(func.coalesce(Listing.maker, ""))) > 0)
+        .group_by(Listing.maker)
+        .order_by(func.count(Listing.id).desc(), func.lower(Listing.maker))
+        .limit(limit * 3)
+    )
+    if only_active:
+        stmt = stmt.where(Listing.is_active.is_(True))
+
+    with SessionLocal() as session:
+        rows = session.execute(stmt).all()
+    values = [maker.strip() for maker, _ in rows if maker and not _is_unknown_text(maker)]
+    return values[:limit]
+
+
+def list_filter_models(
+    *,
+    makes: list[str] | None = None,
+    only_active: bool = True,
+    limit: int = 10,
+) -> list[str]:
+    stmt = (
+        select(Listing.model, func.count(Listing.id).label("cnt"))
+        .where(Listing.source == "carsensor")
+        .where(Listing.deleted_at.is_(None))
+        .where(func.length(func.trim(func.coalesce(Listing.model, ""))) > 0)
+        .group_by(Listing.model)
+        .order_by(func.count(Listing.id).desc(), func.lower(Listing.model))
+        .limit(limit * 3)
+    )
+    if only_active:
+        stmt = stmt.where(Listing.is_active.is_(True))
+    if makes:
+        normalized_makes = _norm_eq_values(makes)
+        if normalized_makes:
+            stmt = stmt.where(func.lower(func.trim(Listing.maker)).in_(normalized_makes))
+
+    with SessionLocal() as session:
+        rows = session.execute(stmt).all()
+    values = [model.strip() for model, _ in rows if model and not _is_unknown_text(model)]
+    return values[:limit]
+
+
+def list_filter_colors(
+    *,
+    makes: list[str] | None = None,
+    models: list[str] | None = None,
+    only_active: bool = True,
+    limit: int = 100,
+) -> list[str]:
+    stmt = (
+        select(Listing.color)
+        .where(Listing.source == "carsensor")
+        .where(Listing.deleted_at.is_(None))
+        .where(func.length(func.trim(func.coalesce(Listing.color, ""))) > 0)
+    )
+    if only_active:
+        stmt = stmt.where(Listing.is_active.is_(True))
+    if makes:
+        stmt = stmt.where(or_(*[func.lower(Listing.maker).like(_norm_like(make)) for make in makes]))
+    if models:
+        stmt = stmt.where(or_(*[func.lower(Listing.model).like(_norm_like(model)) for model in models]))
+    stmt = stmt.distinct().limit(limit * 3)
+
+    with SessionLocal() as session:
+        rows = session.scalars(stmt).all()
+    values = sorted({item.strip() for item in rows if item and not _is_unknown_text(item)}, key=str.lower)
+    values = values[:limit]
+    return values
 
 
 def is_favorite(*, user_id: int, source: str, external_id: str) -> bool:

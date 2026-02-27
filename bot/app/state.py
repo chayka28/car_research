@@ -19,7 +19,7 @@ ScreenType = Literal[
     "input",
     "results",
     "empty",
-    "settings",
+    "waitlist",
 ]
 
 
@@ -29,6 +29,15 @@ class PaginationState:
     pages: int = 1
     total: int = 0
     page_size: int = 1
+
+
+@dataclass
+class WaitlistEntry:
+    query_hash: str
+    title: str
+    query_text: str | None
+    filters: SearchFilters
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -46,6 +55,9 @@ class UserSession:
     last_screen_type: ScreenType | None = None
     last_query_hash: str | None = None
     pagination_state: PaginationState = field(default_factory=PaginationState)
+    filter_back_action: str = "home"
+    empty_retry_used: bool = False
+    waitlist: list[WaitlistEntry] = field(default_factory=list)
 
     current_listing: ListingCard | None = None
     last_result: PagedResult | None = None
@@ -88,4 +100,3 @@ class SessionStore:
 
 def init_session_store(ttl_seconds: int) -> SessionStore:
     return SessionStore(ttl_seconds=ttl_seconds)
-
